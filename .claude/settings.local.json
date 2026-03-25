@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/silabs/Desktop/freelance/squawk-studio-api/src/**)",
+      "Read(//Users/silabs/Desktop/freelance/squawk-studio-api/**)"
+    ]
+  }
+}

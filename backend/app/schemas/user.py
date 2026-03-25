@@ -1,0 +1,33 @@
+import uuid
+from datetime import datetime
+from pydantic import BaseModel, EmailStr
+
+
+class UserResponse(BaseModel):
+    id: uuid.UUID
+    email: EmailStr
+    name: str
+    avatar_url: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PhotoResponse(BaseModel):
+    id: uuid.UUID
+    s3_key: str
+    photo_type: str
+    sort_order: int
+    url: str | None = None  # populated by service
+
+    model_config = {"from_attributes": True}
+
+
+class IdentityResponse(BaseModel):
+    id: uuid.UUID
+    status: str
+    image_url: str | None = None  # populated by service
+    is_active: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

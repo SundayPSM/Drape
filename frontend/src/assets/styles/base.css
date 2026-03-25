@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-bg: theme('colors.drape.cream');
+    --color-surface: #ffffff;
+    --color-text: theme('colors.drape.obsidian');
+    --color-text-muted: theme('colors.drape.mist');
+    --color-border: #e5e5e5;
+    --color-accent: theme('colors.drape.gold');
+  }
+
+  .dark {
+    --color-bg: theme('colors.drape.obsidian');
+    --color-surface: theme('colors.drape.charcoal');
+    --color-text: theme('colors.drape.cream');
+    --color-text-muted: theme('colors.drape.mist');
+    --color-border: theme('colors.drape.charcoal-light');
+    --color-accent: theme('colors.drape.gold');
+  }
+
+  * {
+    @apply border-[var(--color-border)];
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-[var(--color-bg)] text-[var(--color-text)] font-body transition-colors duration-300;
+    min-height: 100dvh;
+  }
+
+  h1, h2, h3 {
+    @apply font-display;
+  }
+
+  img {
+    @apply max-w-full;
+  }
+
+  ::selection {
+    @apply bg-drape-gold/20 text-drape-obsidian;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full
+           bg-drape-obsidian text-drape-cream font-body font-medium text-sm
+           transition-all duration-200 hover:bg-drape-charcoal-light
+           active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed
+           dark:bg-drape-cream dark:text-drape-obsidian dark:hover:bg-drape-bone;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full
+           border border-[var(--color-border)] font-body font-medium text-sm
+           text-[var(--color-text)] transition-all duration-200
+           hover:border-drape-gold hover:text-drape-gold
+           active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-gold {
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full
+           bg-drape-gold text-drape-obsidian font-body font-medium text-sm
+           transition-all duration-200 hover:bg-drape-gold-light
+           active:scale-[0.98] shadow-md shadow-drape-gold/20
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .card {
+    @apply bg-[var(--color-surface)] rounded-2xl border border-[var(--color-border)]
+           transition-all duration-200;
+  }
+
+  .card-hover {
+    @apply card hover:shadow-lg hover:-translate-y-0.5;
+  }
+
+  .input {
+    @apply w-full px-4 py-3 rounded-xl border border-[var(--color-border)]
+           bg-[var(--color-surface)] text-[var(--color-text)]
+           placeholder:text-[var(--color-text-muted)]
+           focus:outline-none focus:ring-2 focus:ring-drape-gold/30 focus:border-drape-gold
+           transition-all duration-200 text-sm;
+  }
+
+  .skeleton {
+    @apply bg-gradient-to-r from-transparent via-drape-gold/5 to-transparent
+           bg-[length:200%_100%] animate-shimmer rounded-lg;
+  }
+
+  .page-container {
+    @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+
+  .section-title {
+    @apply font-display text-3xl md:text-4xl font-semibold tracking-tight;
+  }
+}
