@@ -28,7 +28,7 @@ import DrapeButton from '@/components/ui/DrapeButton.vue'
           you — dresses, blazers, shoes, watches. No more guessing.
         </p>
         <div class="flex flex-col sm:flex-row gap-4 justify-center">
-          <RouterLink to="/register">
+          <RouterLink to="/login">
             <DrapeButton variant="gold" size="lg">Start for free</DrapeButton>
           </RouterLink>
           <RouterLink to="/catalog">
@@ -66,7 +66,7 @@ import DrapeButton from '@/components/ui/DrapeButton.vue'
         <p class="text-[var(--color-text-muted)] mb-8 text-lg">
           Join thousands of shoppers who buy with confidence.
         </p>
-        <RouterLink to="/register">
+        <RouterLink to="/login">
           <DrapeButton variant="gold" size="lg">Create your identity</DrapeButton>
         </RouterLink>
       </div>

@@ -10,14 +10,13 @@ class Settings(BaseSettings):
     app_version: str = "1.0.0"
     debug: bool = False
 
-    # Auth
-    secret_key: str = "change-me"
-    algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60
-    refresh_token_expire_days: int = 30
+    # Database (Supabase PostgreSQL)
+    database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/postgres"
 
-    # Database
-    database_url: str = "postgresql+asyncpg://drape:drape@localhost:5432/drape"
+    # Supabase Auth
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    supabase_jwt_secret: str = ""  # used to verify tokens server-side
 
     # Redis / Celery
     redis_url: str = "redis://localhost:6379/0"
@@ -25,7 +24,6 @@ class Settings(BaseSettings):
     # Replicate
     replicate_api_token: str = ""
     replicate_webhook_secret: str = ""
-    # IDM-VTON model version on Replicate
     replicate_tryon_version: str = "c871bb9b046607b680449ecbae55fd8c6d945e0a1948644bf2361b3d021d3ff4"
 
     # AWS S3
@@ -33,12 +31,12 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = ""
     aws_s3_bucket: str = "drape-assets"
     aws_s3_region: str = "us-east-1"
-    aws_s3_endpoint_url: str = ""  # blank = AWS; set for R2/MinIO
+    aws_s3_endpoint_url: str = ""
 
     # CORS
     allowed_origins: list[str] = ["http://localhost:5173", "https://drape.app"]
 
-    # App URL (used for webhook registration)
+    # App URL (for webhooks)
     app_url: str = "http://localhost:8000"
 
 

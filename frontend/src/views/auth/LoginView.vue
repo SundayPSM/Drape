@@ -1,56 +1,47 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { useUIStore } from '@/stores/ui'
-import DrapeInput from '@/components/ui/DrapeInput.vue'
-import DrapeButton from '@/components/ui/DrapeButton.vue'
 
-const router = useRouter()
-const route = useRoute()
 const authStore = useAuthStore()
-const uiStore = useUIStore()
-
-const email = ref('')
-const password = ref('')
-const error = ref('')
-
-async function submit() {
-  error.value = ''
-  try {
-    await authStore.login(email.value, password.value)
-    const redirect = route.query.redirect as string || '/dashboard'
-    router.push(redirect)
-  } catch (err: any) {
-    error.value = err?.response?.data?.detail || 'Login failed. Please try again.'
-  }
-}
 </script>
 
 <template>
   <div class="min-h-screen flex items-center justify-center px-4">
-    <div class="w-full max-w-md animate-scaleIn">
-      <div class="text-center mb-10">
-        <RouterLink to="/" class="font-display text-2xl font-semibold">Drape</RouterLink>
-        <h1 class="font-display text-3xl font-semibold mt-6 mb-2">Welcome back</h1>
-        <p class="text-[var(--color-text-muted)] text-sm">Sign in to your account</p>
-      </div>
+    <div class="w-full max-w-sm animate-scaleIn text-center">
 
-      <div class="card p-8">
-        <form @submit.prevent="submit" class="flex flex-col gap-5">
-          <DrapeInput v-model="email" label="Email" type="email" placeholder="you@example.com" />
-          <DrapeInput v-model="password" label="Password" type="password" placeholder="••••••••" />
-          <p v-if="error" class="text-sm text-red-500 text-center">{{ error }}</p>
-          <DrapeButton type="submit" variant="gold" :loading="authStore.loading" class="w-full mt-2">
-            Sign in
-          </DrapeButton>
-        </form>
-      </div>
+      <RouterLink to="/" class="font-display text-2xl font-semibold">Drape</RouterLink>
 
-      <p class="text-center text-sm text-[var(--color-text-muted)] mt-6">
-        Don't have an account?
-        <RouterLink to="/register" class="text-drape-gold hover:underline ml-1">Sign up</RouterLink>
+      <h1 class="font-display text-3xl font-semibold mt-8 mb-2">Welcome</h1>
+      <p class="text-[var(--color-text-muted)] text-sm mb-10">
+        Sign in to try products on yourself instantly
       </p>
+
+      <div class="card p-8 flex flex-col gap-4">
+        <!-- Google Sign In -->
+        <button
+          class="w-full flex items-center justify-center gap-3 px-6 py-3.5 rounded-full
+                 border border-[var(--color-border)] bg-[var(--color-surface)]
+                 text-[var(--color-text)] font-medium text-sm
+                 hover:border-drape-gold/50 hover:shadow-md
+                 transition-all duration-200 active:scale-[0.98]
+                 disabled:opacity-50 disabled:cursor-not-allowed"
+          :disabled="authStore.loading"
+          @click="authStore.loginWithGoogle"
+        >
+          <!-- Google logo -->
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z" fill="#4285F4"/>
+            <path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z" fill="#34A853"/>
+            <path d="M3.964 10.707A5.41 5.41 0 013.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 000 9c0 1.452.348 2.827.957 4.039l3.007-2.332z" fill="#FBBC05"/>
+            <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 00.957 4.96L3.964 7.293C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
+          </svg>
+          <span>{{ authStore.loading ? 'Redirecting...' : 'Continue with Google' }}</span>
+        </button>
+
+        <p class="text-xs text-[var(--color-text-muted)] mt-2">
+          By continuing, you agree to our terms of service and privacy policy.
+        </p>
+      </div>
+
     </div>
   </div>
 </template>

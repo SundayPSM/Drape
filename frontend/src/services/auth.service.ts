@@ -1,28 +1,53 @@
-import api from './api'
-import type { TokenResponse } from '@/types'
+import { supabase } from './supabase'
+import type { Session, User as SupabaseUser } from '@supabase/supabase-js'
 
 export const authService = {
-  async register(email: string, name: string, password: string): Promise<TokenResponse> {
-    const { data } = await api.post<TokenResponse>('/api/v1/auth/register', { email, name, password })
-    return data
+  /**
+   * Trigger Google OAuth — redirects to Google, then back to /auth/callback
+   */
+  async signInWithGoogle(): Promise<void> {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
+        },
+      },
+    })
+    if (error) throw error
   },
 
-  async login(email: string, password: string): Promise<TokenResponse> {
-    const { data } = await api.post<TokenResponse>('/api/v1/auth/login', { email, password })
-    return data
+  async signOut(): Promise<void> {
+    await supabase.auth.signOut()
   },
 
-  saveTokens(tokens: TokenResponse) {
-    localStorage.setItem('access_token', tokens.access_token)
-    localStorage.setItem('refresh_token', tokens.refresh_token)
+  async getSession(): Promise<Session | null> {
+    const { data } = await supabase.auth.getSession()
+    return data.session
   },
 
-  clearTokens() {
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
+  async getAccessToken(): Promise<string | null> {
+    const session = await authService.getSession()
+    return session?.access_token ?? null
   },
 
   isAuthenticated(): boolean {
-    return !!localStorage.getItem('access_token')
+    // Synchronous check — Supabase persists session in localStorage
+    const raw = localStorage.getItem('sb-' + import.meta.env.VITE_SUPABASE_URL?.split('//')[1]?.split('.')[0] + '-auth-token')
+    if (!raw) return false
+    try {
+      const parsed = JSON.parse(raw)
+      return !!parsed?.access_token
+    } catch {
+      return false
+    }
+  },
+
+  onAuthStateChange(callback: (user: SupabaseUser | null) => void) {
+    return supabase.auth.onAuthStateChange((_event, session) => {
+      callback(session?.user ?? null)
+    })
   },
 }

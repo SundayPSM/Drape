@@ -11,41 +11,45 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed(() => !!user.value)
 
   async function init() {
-    if (authService.isAuthenticated()) {
+    // Listen for Supabase auth state changes (handles page refresh, OAuth callback)
+    authService.onAuthStateChange(async (supabaseUser) => {
+      if (supabaseUser) {
+        try {
+          // Fetch our app's user record (created/upserted by backend on first login)
+          user.value = await userService.getMe()
+        } catch {
+          user.value = null
+        }
+      } else {
+        user.value = null
+      }
+    })
+
+    // Also check current session immediately on app start
+    const session = await authService.getSession()
+    if (session) {
       try {
         user.value = await userService.getMe()
       } catch {
-        authService.clearTokens()
+        user.value = null
       }
     }
   }
 
-  async function register(email: string, name: string, password: string) {
+  async function loginWithGoogle() {
     loading.value = true
     try {
-      const tokens = await authService.register(email, name, password)
-      authService.saveTokens(tokens)
-      user.value = await userService.getMe()
+      await authService.signInWithGoogle()
+      // Page will redirect to Google — user.value is set in onAuthStateChange on return
     } finally {
       loading.value = false
     }
   }
 
-  async function login(email: string, password: string) {
-    loading.value = true
-    try {
-      const tokens = await authService.login(email, password)
-      authService.saveTokens(tokens)
-      user.value = await userService.getMe()
-    } finally {
-      loading.value = false
-    }
-  }
-
-  function logout() {
-    authService.clearTokens()
+  async function logout() {
+    await authService.signOut()
     user.value = null
   }
 
-  return { user, loading, isAuthenticated, init, register, login, logout }
+  return { user, loading, isAuthenticated, init, loginWithGoogle, logout }
 })

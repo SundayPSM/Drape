@@ -1,22 +1,9 @@
 version: "3.9"
 
-services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: drape
-      POSTGRES_PASSWORD: drape
-      POSTGRES_DB: drape
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U drape"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+# Postgres is removed — using Supabase remote DB
+# Only Redis runs locally for Celery task queue
 
+services:
   redis:
     image: redis:7-alpine
     ports:
@@ -37,8 +24,6 @@ services:
       - "8000:8000"
     env_file: .env
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
@@ -51,8 +36,6 @@ services:
       dockerfile: Dockerfile
     env_file: .env
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
@@ -72,5 +55,4 @@ services:
     command: npm run dev -- --host
 
 volumes:
-  postgres_data:
   redis_data:

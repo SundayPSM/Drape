@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { authService } from '@/services/auth.service'
+import { supabase } from '@/services/supabase'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -22,6 +22,13 @@ const router = createRouter({
       name: 'register',
       component: () => import('@/views/auth/RegisterView.vue'),
       meta: { public: true, guestOnly: true },
+    },
+    {
+      // Supabase redirects here after Google OAuth
+      path: '/auth/callback',
+      name: 'auth-callback',
+      component: () => import('@/views/auth/AuthCallbackView.vue'),
+      meta: { public: true },
     },
     {
       path: '/onboarding',
@@ -66,9 +73,11 @@ const router = createRouter({
   ],
 })
 
-// Auth guard
-router.beforeEach((to) => {
-  const authenticated = authService.isAuthenticated()
+// Auth guard — uses Supabase session
+router.beforeEach(async (to) => {
+  const { data } = await supabase.auth.getSession()
+  const authenticated = !!data.session
+
   if (!to.meta.public && !authenticated) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }

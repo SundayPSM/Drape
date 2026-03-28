@@ -1,4 +1,5 @@
 import axios, { type AxiosError } from 'axios'
+import { supabase } from './supabase'
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
@@ -6,39 +7,29 @@ const api = axios.create({
   timeout: 30000,
 })
 
-// Attach access token to every request
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('access_token')
+// Attach Supabase access token to every request
+api.interceptors.request.use(async (config) => {
+  const { data } = await supabase.auth.getSession()
+  const token = data.session?.access_token
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config
 })
 
-// Auto-refresh on 401
+// On 401 try to refresh the Supabase session once, then redirect to login
 api.interceptors.response.use(
   (res) => res,
   async (error: AxiosError) => {
     const original = error.config as any
     if (error.response?.status === 401 && !original._retry) {
       original._retry = true
-      const refreshToken = localStorage.getItem('refresh_token')
-      if (refreshToken) {
-        try {
-          const { data } = await axios.post(
-            `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/v1/auth/refresh`,
-            { refresh_token: refreshToken },
-          )
-          localStorage.setItem('access_token', data.access_token)
-          localStorage.setItem('refresh_token', data.refresh_token)
-          original.headers.Authorization = `Bearer ${data.access_token}`
-          return api(original)
-        } catch {
-          localStorage.removeItem('access_token')
-          localStorage.removeItem('refresh_token')
-          window.location.href = '/login'
-        }
+      const { data, error: refreshError } = await supabase.auth.refreshSession()
+      if (!refreshError && data.session) {
+        original.headers.Authorization = `Bearer ${data.session.access_token}`
+        return api(original)
       }
+      window.location.href = '/login'
     }
     return Promise.reject(error)
   },
