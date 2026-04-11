@@ -18,13 +18,17 @@ export const useUserStore = defineStore('user', () => {
 
   async function uploadPhoto(file: File, photoType: string = 'general'): Promise<UserPhoto> {
     const presignData = await userService.presignPhotoUpload(photoType)
-    await userService.uploadPhotoToS3(presignData.presigned, file)
+    await userService.uploadPhotoToStorage(presignData.presigned, file)
     await loadPhotos()
     return photos.value.find((p) => p.id === presignData.photo_id)!
   }
 
-  async function generateIdentity(photoIds: string[]) {
-    identity.value = await userService.generateIdentity(photoIds)
+  async function generateIdentityCandidates(photoIds: string[]) {
+    return await userService.generateIdentityCandidates(photoIds)
+  }
+
+  async function confirmIdentity(s3Key: string, photoIds: string[]) {
+    identity.value = await userService.confirmIdentity(s3Key, photoIds)
   }
 
   const hasEnoughPhotos = () => photos.value.length >= 4
@@ -37,7 +41,8 @@ export const useUserStore = defineStore('user', () => {
     loadPhotos,
     loadIdentity,
     uploadPhoto,
-    generateIdentity,
+    generateIdentityCandidates,
+    confirmIdentity,
     hasEnoughPhotos,
     hasIdentity,
   }

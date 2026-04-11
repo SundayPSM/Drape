@@ -1,23 +1,26 @@
 """
 Core AI orchestration service.
-Handles the full virtual try-on pipeline via Replicate IDM-VTON.
+Handles the full virtual try-on pipeline via Gemini image generation.
 """
+import asyncio
 import uuid
-import hmac
-import hashlib
+import logging
 from datetime import datetime, timezone
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.config import settings
-from app.core.s3 import get_public_url, upload_from_url
+from app.core.gemini import generate_tryon, GarmentInput, SubjectProfile
+from app.core.s3 import get_public_url, upload_bytes
 from app.core.exceptions import NotFoundError, ForbiddenError, DomainError
 from app.db.models.tryon_job import TryOnJob, TryOnStatus
 from app.db.models.identity import UserIdentity, IdentityStatus
 from app.db.models.product import Product
+from app.db.models.user import User
 from app.schemas.tryon import TryOnSubmitRequest, TryOnStatusResponse
+
+_log = logging.getLogger(__name__)
 
 
 async def submit_tryon(
@@ -34,12 +37,24 @@ async def submit_tryon(
     if not identity.s3_key:
         raise DomainError("Identity image not available", 422)
 
+    # Load user profile for body proportions
+    user = await db.get(User, user_id)
+    subject = SubjectProfile(
+        height_cm=user.height_cm or 170,
+        weight_kg=user.weight_kg or 70,
+        gender=user.gender or "person",
+        age=user.age or 25,
+        body_type=user.body_type or "",
+    ) if user else None
+
     # Validate product exists
     product = await db.get(Product, data.product_id)
     if not product or not product.is_active:
         raise NotFoundError("Product")
 
-    human_img_url = get_public_url(identity.s3_key)
+    identity_img_url = get_public_url(identity.s3_key)
+    # Iterative layering: use previous result as the person base if provided
+    human_img_url = data.base_image_url if data.base_image_url else identity_img_url
     garment_img_url = (
         get_public_url(product.image_s3_key) if product.image_s3_key else product.image_url
     )
@@ -59,81 +74,81 @@ async def submit_tryon(
     await db.flush()
     await db.refresh(job)
 
-    # Submit to Replicate
-    webhook_url = f"{settings.app_url}/api/v1/webhooks/replicate"
-    prediction_id = await _call_replicate(
-        human_img_url=human_img_url,
-        garment_img_url=garment_img_url,
-        garment_desc=product.description or product.name,
-        webhook_url=webhook_url,
+    # Collect all URLs to download: [person, pose_ref?, primary_garment, ...extras]
+    primary_category = product.category.value if hasattr(product.category, "value") else str(product.category)
+    primary_fit = data.fit if data.fit in ("slim", "regular", "oversized") else "regular"
+    primary_desc = product.description or product.name or primary_category
+
+    all_urls = [human_img_url]
+    if data.pose_image_url:
+        all_urls.append(data.pose_image_url)
+    all_urls.append(garment_img_url)
+    for g in data.extra_garments:
+        all_urls.append(g.image_url)
+
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            fetched = await asyncio.gather(*[client.get(u) for u in all_urls])
+        for r in fetched:
+            r.raise_for_status()
+    except Exception as exc:
+        job.status = TryOnStatus.failed
+        job.error_message = f"Failed to download images: {exc}"
+        await db.flush()
+        return job
+
+    idx = 0
+    person_bytes = fetched[idx].content; idx += 1
+    pose_bytes: bytes | None = None
+    if data.pose_image_url:
+        pose_bytes = fetched[idx].content; idx += 1
+
+    garments: list[GarmentInput] = [
+        GarmentInput(
+            image_bytes=fetched[idx].content,
+            category=primary_category,
+            fit=primary_fit,
+            description=primary_desc[:300],
+        )
+    ]
+    idx += 1
+    for extra in data.extra_garments:
+        garments.append(GarmentInput(
+            image_bytes=fetched[idx].content,
+            category=extra.category,
+            fit=extra.fit if extra.fit in ("slim", "regular", "oversized") else "regular",
+            description=(extra.name or extra.category)[:300],
+        ))
+        idx += 1
+
+    _log.info(
+        "Starting Gemini try-on for job %s (%d garments, pose_ref=%s, layering=%s, height=%scm)",
+        job.id, len(garments), bool(pose_bytes), bool(data.base_image_url), subject.height_cm if subject else "?"
     )
 
-    job.replicate_prediction_id = prediction_id
+    result_bytes = await generate_tryon(
+        person_bytes=person_bytes,
+        garments=garments,
+        pose_bytes=pose_bytes,
+        subject=subject,
+    )
+
+    if not result_bytes:
+        job.status = TryOnStatus.failed
+        job.error_message = "AI try-on generation failed. Please try again."
+        await db.flush()
+        return job
+
+    # Upload result to Supabase Storage
+    result_key = await upload_bytes(result_bytes, prefix=f"results/{user_id}")
+    job.result_s3_key = result_key
+    job.result_url = get_public_url(result_key)
+    job.status = TryOnStatus.completed
+    job.completed_at = datetime.now(timezone.utc)
     await db.flush()
+    _log.info("Try-on job %s completed successfully", job.id)
     return job
 
-
-async def _call_replicate(
-    human_img_url: str,
-    garment_img_url: str,
-    garment_desc: str,
-    webhook_url: str,
-) -> str:
-    """Submit prediction to Replicate and return prediction_id."""
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            "https://api.replicate.com/v1/predictions",
-            headers={
-                "Authorization": f"Bearer {settings.replicate_api_token}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "version": settings.replicate_tryon_version,
-                "input": {
-                    "human_img": human_img_url,
-                    "garm_img": garment_img_url,
-                    "garment_des": garment_desc[:200],
-                    "is_checked": True,
-                    "is_checked_crop": False,
-                    "denoise_steps": 30,
-                    "seed": 42,
-                },
-                "webhook": webhook_url,
-                "webhook_events_filter": ["completed"],
-            },
-        )
-        resp.raise_for_status()
-        return resp.json()["id"]
-
-
-async def handle_webhook(payload: dict, db: AsyncSession) -> None:
-    """Process Replicate webhook callback and update job status."""
-    prediction_id = payload.get("id")
-    if not prediction_id:
-        return
-
-    result = await db.scalar(
-        select(TryOnJob).where(TryOnJob.replicate_prediction_id == prediction_id)
-    )
-    if not result:
-        return
-
-    status = payload.get("status")
-    if status == "succeeded":
-        output = payload.get("output", [])
-        output_url = output[0] if output else None
-        if output_url:
-            # Re-upload to our S3 for long-term storage
-            s3_key = await upload_from_url(output_url, prefix=f"results/{result.user_id}")
-            result.result_s3_key = s3_key
-            result.result_url = get_public_url(s3_key)
-        result.status = TryOnStatus.completed
-        result.completed_at = datetime.now(timezone.utc)
-    elif status == "failed":
-        result.status = TryOnStatus.failed
-        result.error_message = str(payload.get("error", "Unknown error"))
-
-    await db.flush()
 
 
 async def get_job_status(job_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession) -> TryOnStatusResponse:
@@ -141,40 +156,12 @@ async def get_job_status(job_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession
     if not job or str(job.user_id) != str(user_id):
         raise NotFoundError("Try-on job")
 
-    # Poll Replicate if still processing and we have a prediction_id
-    if job.status == TryOnStatus.processing and job.replicate_prediction_id:
-        await _poll_replicate(job, db)
-
     return TryOnStatusResponse(
         job_id=job.id,
         status=job.status,
         result_url=job.result_url,
         error_message=job.error_message,
     )
-
-
-async def _poll_replicate(job: TryOnJob, db: AsyncSession) -> None:
-    """Fallback polling if webhook was missed."""
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.get(
-            f"https://api.replicate.com/v1/predictions/{job.replicate_prediction_id}",
-            headers={"Authorization": f"Bearer {settings.replicate_api_token}"},
-        )
-        if resp.status_code != 200:
-            return
-        await handle_webhook(resp.json(), db)
-
-
-def verify_replicate_webhook(body: bytes, signature_header: str) -> bool:
-    """Verify Replicate webhook HMAC signature."""
-    if not settings.replicate_webhook_secret:
-        return True  # skip verification in dev
-    expected = hmac.new(
-        settings.replicate_webhook_secret.encode(),
-        body,
-        hashlib.sha256,
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature_header)
 
 
 async def get_user_history(user_id: uuid.UUID, db: AsyncSession, page: int = 1, page_size: int = 20) -> list[TryOnJob]:

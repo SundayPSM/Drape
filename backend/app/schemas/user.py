@@ -8,9 +8,25 @@ class UserResponse(BaseModel):
     email: EmailStr
     name: str
     avatar_url: str | None
+    gender: str | None = None
+    age: int | None = None
+    height_cm: int | None = None
+    weight_kg: int | None = None
+    usual_size: str | None = None
+    skin_tone: str | None = None
+    body_type: str | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ProfileUpdateRequest(BaseModel):
+    gender: str | None = None
+    age: int | None = None
+    height_cm: int | None = None
+    weight_kg: int | None = None
+    usual_size: str | None = None
+    skin_tone: str | None = None
 
 
 class PhotoResponse(BaseModel):

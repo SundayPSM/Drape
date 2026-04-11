@@ -25,6 +25,23 @@ class ScrapeRequest(BaseModel):
     url: str
 
 
+class ExtractImageRequest(BaseModel):
+    url: str
+
+
+class ExtractImageResponse(BaseModel):
+    image_url: str
+    title: str | None = None
+    source_url: str
+
+
+class QuickAddRequest(BaseModel):
+    image_url: str
+    source_url: str
+    category: ProductCategory
+    name: str | None = None
+
+
 class ProductListResponse(BaseModel):
     items: list[ProductResponse]
     total: int

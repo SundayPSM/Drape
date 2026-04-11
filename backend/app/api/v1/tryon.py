@@ -1,5 +1,5 @@
 import uuid
-from fastapi import APIRouter, Depends, Request, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import get_db
@@ -18,7 +18,12 @@ async def submit_tryon(
     current_user: User = Depends(get_current_user),
 ):
     job = await tryon_service.submit_tryon(current_user.id, data, db)
-    return TryOnStatusResponse(job_id=job.id, status=job.status)
+    return TryOnStatusResponse(
+        job_id=job.id,
+        status=job.status,
+        result_url=job.result_url,
+        error_message=job.error_message,
+    )
 
 
 @router.get("/{job_id}/status", response_model=TryOnStatusResponse)
@@ -49,19 +54,3 @@ async def save_look(
     return await tryon_service.save_look(job_id, current_user.id, db)
 
 
-@router.post("/webhooks/replicate")
-async def replicate_webhook(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-):
-    """Receive Replicate prediction completion webhook."""
-    body = await request.body()
-    sig = request.headers.get("webhook-secret", "")
-
-    if not tryon_service.verify_replicate_webhook(body, sig):
-        raise HTTPException(status_code=401, detail="Invalid webhook signature")
-
-    import json
-    payload = json.loads(body)
-    await tryon_service.handle_webhook(payload, db)
-    return {"ok": True}

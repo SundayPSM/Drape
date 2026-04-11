@@ -1,61 +1,271 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useUIStore } from '@/stores/ui'
+import { userService } from '@/services/user.service'
 import DrapeButton from '@/components/ui/DrapeButton.vue'
 import DrapeSpinner from '@/components/ui/DrapeSpinner.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
-import type { UploadFile } from '@/composables/useFileUpload'
-import { useFileUpload } from '@/composables/useFileUpload'
+import { useGuidedUpload } from '@/composables/useFileUpload'
+import type { GuidedPhotoType } from '@/composables/useFileUpload'
 
 const router = useRouter()
 const userStore = useUserStore()
 const uiStore = useUIStore()
-const { files, isDragging, addFiles, removeFile, handleDrop, handleDragOver, handleDragLeave } = useFileUpload()
+const { slots, setSlotFile, clearSlot, filledCount, allSlotsFilled } = useGuidedUpload()
 
-const step = ref<'upload' | 'generating' | 'confirm'>('upload')
-const generating = ref(false)
-const generatedIdentity = ref<any>(null)
+type Step = 'profile' | 'upload' | 'generating' | 'angles' | 'pick' | 'done'
+const step = ref<Step>('profile')
+const generatingMessage = ref('Uploading your photos...')
 
-const photoTypes: UploadFile['type'][] = ['front', 'side', 'full_body', 'general']
-const photoLabels = {
-  front: 'Front view',
-  side: 'Side view',
-  full_body: 'Full body',
-  general: 'Additional',
-}
+// ── Profile ───────────────────────────────────────────────────────────────────
+const profile = reactive({
+  gender: '',
+  age: null as number | null,
+  height_cm: null as number | null,
+  weight_kg: null as number | null,
+  usual_size: '',
+  skin_tone: '',
+})
 
-const validFiles = computed(() => files.value.filter((f) => !f.error))
-const canProceed = computed(() => validFiles.value.length >= 4)
+const GENDERS = ['Male', 'Female', 'Non-binary', 'Prefer not to say']
+const SIZES   = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL']
+const SKIN_TONES = [
+  { label: 'Very Light',   value: 'very_light',  hex: '#FDDBB4' },
+  { label: 'Light',        value: 'light',        hex: '#F5C38D' },
+  { label: 'Medium Light', value: 'medium_light', hex: '#D4A574' },
+  { label: 'Medium',       value: 'medium',       hex: '#B8834A' },
+  { label: 'Medium Dark',  value: 'medium_dark',  hex: '#8B5A2B' },
+  { label: 'Dark',         value: 'dark',         hex: '#4A2F1A' },
+]
 
-function handleFileInput(event: Event) {
-  const input = event.target as HTMLInputElement
-  if (input.files) addFiles(input.files)
-}
+// Body type options with SVG icon paths — vary by gender
+const BODY_TYPES_MALE = [
+  {
+    value: 'slim',
+    label: 'Slim',
+    desc: 'Narrow frame, lean',
+    // Rectangle — thin
+    svg: `<rect x="9" y="2" width="6" height="20" rx="2" fill="currentColor" opacity="0.15"/>
+          <rect x="10" y="2" width="4" height="4" rx="2" fill="currentColor"/>
+          <path d="M9 6h6v8H9z" fill="currentColor" opacity="0.7"/>
+          <path d="M9 14h2v8h2v-8h2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`,
+  },
+  {
+    value: 'athletic',
+    label: 'Athletic',
+    desc: 'V-shape, broad shoulders',
+    svg: `<path d="M7 8h10" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M9 8v6h6V8" fill="currentColor" opacity="0.15"/>
+          <path d="M9 14l-1 8h8l-1-8" fill="currentColor" opacity="0.5"/>
+          <circle cx="12" cy="4" r="3" fill="currentColor"/>`,
+  },
+  {
+    value: 'average',
+    label: 'Average',
+    desc: 'Balanced proportions',
+    svg: `<circle cx="12" cy="4" r="3" fill="currentColor"/>
+          <rect x="8" y="7" width="8" height="9" rx="1.5" fill="currentColor" opacity="0.6"/>
+          <path d="M9 16l-1.5 6h9l-1.5-6" fill="currentColor" opacity="0.4"/>`,
+  },
+  {
+    value: 'stocky',
+    label: 'Stocky',
+    desc: 'Broad, compact build',
+    svg: `<circle cx="12" cy="4" r="3" fill="currentColor"/>
+          <rect x="7" y="7" width="10" height="9" rx="2" fill="currentColor" opacity="0.7"/>
+          <path d="M8 16l-1.5 6h11l-1.5-6" fill="currentColor" opacity="0.5"/>`,
+  },
+  {
+    value: 'heavy',
+    label: 'Heavy',
+    desc: 'Fuller, rounded frame',
+    svg: `<circle cx="12" cy="4" r="3" fill="currentColor"/>
+          <ellipse cx="12" cy="13" rx="6" ry="7" fill="currentColor" opacity="0.6"/>
+          <path d="M8 18l-1 4h10l-1-4" fill="currentColor" opacity="0.4"/>`,
+  },
+]
 
-async function uploadAndGenerate() {
-  generating.value = true
-  step.value = 'generating'
+const BODY_TYPES_FEMALE = [
+  {
+    value: 'hourglass',
+    label: 'Hourglass',
+    desc: 'Equal bust & hips, defined waist',
+    svg: `<circle cx="12" cy="4" r="3" fill="currentColor"/>
+          <path d="M7 8c0 0 2 2 5 2s5-2 5-2v4c0 0-2 2-5 2s-5-2-5-2V8z" fill="currentColor" opacity="0.5"/>
+          <path d="M7 14c0 0 2-1 5-1s5 1 5 1v4c0 0-2 2-5 2s-5-2-5-2v-4z" fill="currentColor" opacity="0.7"/>`,
+  },
+  {
+    value: 'pear',
+    label: 'Pear',
+    desc: 'Fuller hips, narrower bust',
+    svg: `<circle cx="12" cy="4" r="3" fill="currentColor"/>
+          <path d="M9 8h6v5H9z" fill="currentColor" opacity="0.4"/>
+          <ellipse cx="12" cy="18" rx="6" ry="5" fill="currentColor" opacity="0.7"/>`,
+  },
+  {
+    value: 'apple',
+    label: 'Apple',
+    desc: 'Fuller midsection, narrow hips',
+    svg: `<circle cx="12" cy="4" r="3" fill="currentColor"/>
+          <ellipse cx="12" cy="13" rx="6" ry="6" fill="currentColor" opacity="0.6"/>
+          <path d="M10 19h4v3h-4z" fill="currentColor" opacity="0.4"/>`,
+  },
+  {
+    value: 'rectangle',
+    label: 'Rectangle',
+    desc: 'Straight, similar proportions',
+    svg: `<circle cx="12" cy="4" r="3" fill="currentColor"/>
+          <rect x="9" y="7" width="6" height="15" rx="1.5" fill="currentColor" opacity="0.5"/>`,
+  },
+  {
+    value: 'athletic',
+    label: 'Athletic',
+    desc: 'Toned, broad shoulders',
+    svg: `<circle cx="12" cy="4" r="3" fill="currentColor"/>
+          <path d="M7 8h10v5c0 2-2 3-5 3s-5-1-5-3V8z" fill="currentColor" opacity="0.6"/>
+          <path d="M9 16l-1 6h8l-1-6" fill="currentColor" opacity="0.4"/>`,
+  },
+]
+
+const BODY_TYPES_OTHER = [
+  { value: 'lean',     label: 'Lean',     desc: 'Slender, minimal mass' },
+  { value: 'athletic', label: 'Athletic', desc: 'Toned and defined' },
+  { value: 'average',  label: 'Average',  desc: 'Balanced proportions' },
+  { value: 'full',     label: 'Full',     desc: 'Fuller, rounded curves' },
+  { value: 'heavy',    label: 'Heavy',    desc: 'Heavier, broader frame' },
+]
+
+const bodyTypeOptions = computed(() => {
+  const g = profile.gender.toLowerCase()
+  if (g === 'male') return BODY_TYPES_MALE
+  if (g === 'female') return BODY_TYPES_FEMALE
+  return BODY_TYPES_OTHER.map(bt => ({ ...bt, svg: '' }))
+})
+
+const profileValid = computed(() =>
+  profile.gender && profile.age && profile.height_cm &&
+  profile.weight_kg && profile.usual_size && profile.skin_tone
+)
+
+async function saveProfile() {
   try {
-    const uploadedIds: string[] = []
-    for (const f of validFiles.value) {
-      const photo = await userStore.uploadPhoto(f.file, f.type)
-      uploadedIds.push(photo.id)
-    }
-    await userStore.generateIdentity(uploadedIds)
-    generatedIdentity.value = userStore.identity
-    step.value = 'confirm'
-  } catch (err: any) {
-    uiStore.toast(err?.response?.data?.detail || 'Failed to generate identity', 'error')
+    await userService.updateProfile({
+      gender: profile.gender,
+      age: profile.age ?? undefined,
+      height_cm: profile.height_cm ?? undefined,
+      weight_kg: profile.weight_kg ?? undefined,
+      usual_size: profile.usual_size,
+      skin_tone: profile.skin_tone,
+    })
     step.value = 'upload'
-  } finally {
-    generating.value = false
+  } catch {
+    uiStore.toast('Failed to save profile. Please try again.', 'error')
   }
 }
 
-function proceed() {
-  router.push('/catalog')
+// ── Guided upload ─────────────────────────────────────────────────────────────
+const slotInputRefs = reactive<Record<string, HTMLInputElement | null>>({})
+const uploadedPhotoIds = ref<string[]>([])
+const angleImages = ref<{ key: string; image_url: string }[]>([])
+const detectedBodyType = ref('')
+const candidates = ref<{ key: string; image_url: string }[]>([])
+const selectedCandidate = ref<{ key: string; image_url: string } | null>(null)
+
+function triggerSlotInput(type: GuidedPhotoType) {
+  slotInputRefs[type]?.click()
+}
+
+function handleSlotInput(event: Event, type: GuidedPhotoType) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (file) setSlotFile(type, file)
+  input.value = ''
+}
+
+const ANGLE_LABELS = [
+  'Rear view', '¾ Left', '¾ Right', 'Low angle', 'High angle',
+  'Seated', 'Walking', 'Arms crossed', 'Upper body', 'Casual pose',
+]
+
+function startGeneratingMessages() {
+  const messages = [
+    { delay: 0,     text: 'Uploading your photos...' },
+    { delay: 5000,  text: 'Analyzing your body type...' },
+    { delay: 15000, text: 'Generating 10 angle variations with Gemini...' },
+    { delay: 45000, text: 'Creating your AI try-on portraits...' },
+    { delay: 75000, text: 'Almost done...' },
+  ]
+  messages.forEach(({ delay, text }) => {
+    setTimeout(() => {
+      if (step.value === 'generating') generatingMessage.value = text
+    }, delay)
+  })
+}
+
+async function uploadAndGenerate() {
+  step.value = 'generating'
+  generatingMessage.value = 'Uploading your photos...'
+  startGeneratingMessages()
+
+  try {
+    // Upload all 6 photos
+    const ids: string[] = []
+    for (const slot of slots.value) {
+      if (!slot.file) throw new Error(`Missing photo: ${slot.label}`)
+      const photo = await userStore.uploadPhoto(slot.file.file, slot.type)
+      ids.push(photo.id)
+    }
+    uploadedPhotoIds.value = ids
+
+    // Full pipeline — returns body_type + angles + candidates
+    const result = await userStore.generateIdentityCandidates(ids)
+
+    detectedBodyType.value = result.body_type
+    angleImages.value = result.angles
+    candidates.value = result.candidates
+
+    if (candidates.value.length === 0) throw new Error('No candidates generated')
+
+    step.value = 'angles'
+  } catch (err: any) {
+    uiStore.toast(err?.response?.data?.detail || 'Generation failed. Please try again.', 'error')
+    step.value = 'upload'
+  }
+}
+
+function proceedToPick() {
+  step.value = 'pick'
+}
+
+function selectCandidate(c: { key: string; image_url: string }) {
+  selectedCandidate.value = c
+}
+
+async function confirmSelection() {
+  if (!selectedCandidate.value) return
+  try {
+    await userStore.confirmIdentity(selectedCandidate.value.key, uploadedPhotoIds.value)
+    step.value = 'done'
+  } catch (err: any) {
+    uiStore.toast(err?.response?.data?.detail || 'Failed to save identity.', 'error')
+  }
+}
+
+// ── Progress ──────────────────────────────────────────────────────────────────
+const STEPS: Step[] = ['profile', 'upload', 'generating', 'angles', 'pick', 'done']
+const STEP_LABELS: Record<Step, string> = {
+  profile: 'Profile', upload: 'Photos', generating: 'AI', angles: 'Angles', pick: 'Pick', done: 'Done',
+}
+
+const SILHOUETTES: Record<GuidedPhotoType, string> = {
+  face_front:    'M12 4a4 4 0 100 8 4 4 0 000-8zM6 20a6 6 0 1112 0',
+  profile_left:  'M14 4a4 4 0 10-4 7.87V20M10 12H6',
+  profile_right: 'M10 4a4 4 0 114 7.87V20M14 12h4',
+  body_front:    'M12 3a3 3 0 100 6 3 3 0 000-6zM5 21v-2a7 7 0 0114 0v2M12 12v9M9 15l3-3 3 3',
+  body_side:     'M12 3a3 3 0 100 6M12 9v12M8 14l4-2M12 21l3-4',
+  three_quarter: 'M11 4a4 4 0 108 2.46V20M11 12H7M15 12h2',
 }
 </script>
 
@@ -63,86 +273,232 @@ function proceed() {
   <div class="min-h-screen">
     <AppHeader />
 
-    <div class="page-container py-12 max-w-2xl mx-auto">
-      <!-- Progress indicator -->
-      <div class="flex items-center gap-3 mb-10">
-        <div
-          v-for="(s, i) in ['upload', 'generating', 'confirm']"
-          :key="s"
-          class="flex items-center gap-3"
-        >
-          <div
-            class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold transition-all duration-300"
-            :class="step === s
-              ? 'bg-drape-gold text-drape-obsidian'
-              : ['upload', 'generating', 'confirm'].indexOf(step) > i
-                ? 'bg-drape-gold/20 text-drape-gold'
-                : 'bg-[var(--color-border)] text-[var(--color-text-muted)]'"
-          >
-            {{ i + 1 }}
+    <div class="page-container py-12 max-w-3xl mx-auto">
+
+      <!-- Progress bar -->
+      <div class="flex items-center gap-2 mb-10">
+        <template v-for="(s, i) in STEPS" :key="s">
+          <div class="flex items-center gap-2">
+            <div
+              class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-semibold transition-all duration-300"
+              :class="step === s
+                ? 'bg-drape-gold text-drape-obsidian'
+                : STEPS.indexOf(step) > i
+                  ? 'bg-drape-gold/20 text-drape-gold'
+                  : 'bg-[var(--color-border)] text-[var(--color-text-muted)]'"
+            >{{ i + 1 }}</div>
+            <span class="text-xs hidden sm:block"
+              :class="step === s ? 'text-drape-gold font-medium' : 'text-[var(--color-text-muted)]'">
+              {{ STEP_LABELS[s] }}
+            </span>
           </div>
-          <div v-if="i < 2" class="flex-1 h-px bg-[var(--color-border)] w-8" />
-        </div>
+          <div v-if="i < STEPS.length - 1" class="flex-1 h-px bg-[var(--color-border)]" />
+        </template>
       </div>
 
-      <!-- Step 1: Upload -->
       <Transition name="fade" mode="out-in">
-        <div v-if="step === 'upload'" key="upload" class="animate-fadeUp">
-          <h1 class="font-display text-3xl font-semibold mb-2">Upload your photos</h1>
+
+        <!-- ── Step 1: Profile ──────────────────────────────────────── -->
+        <div v-if="step === 'profile'" key="profile" class="animate-fadeUp">
+          <h1 class="font-display text-3xl font-semibold mb-2">Tell us about yourself</h1>
           <p class="text-[var(--color-text-muted)] mb-8">
-            Upload at least 4 clear photos of yourself. The better the photos, the more realistic your try-on.
+            This personalises your AI model — accurate proportions, skin tone, and fit.
           </p>
 
-          <!-- Drop zone -->
-          <div
-            class="border-2 border-dashed rounded-2xl p-10 text-center transition-all duration-200 cursor-pointer mb-6"
-            :class="isDragging
-              ? 'border-drape-gold bg-drape-gold/5'
-              : 'border-[var(--color-border)] hover:border-drape-gold/50'"
-            @drop.prevent="handleDrop"
-            @dragover.prevent="handleDragOver"
-            @dragleave="handleDragLeave"
-            @click="($refs.fileInput as HTMLInputElement).click()"
-          >
-            <div class="text-4xl mb-4">📸</div>
-            <p class="font-medium mb-1">Drop photos here or click to upload</p>
-            <p class="text-sm text-[var(--color-text-muted)]">JPEG, PNG or WebP · Max 20MB each</p>
-            <input ref="fileInput" type="file" multiple accept="image/*" class="hidden" @change="handleFileInput" />
-          </div>
+          <div class="space-y-7">
+            <!-- Gender -->
+            <div>
+              <label class="block text-sm font-medium mb-3">Gender</label>
+              <div class="flex flex-wrap gap-2">
+                <button v-for="g in GENDERS" :key="g"
+                  class="px-4 py-2 rounded-full text-sm border transition-all duration-150"
+                  :class="profile.gender === g
+                    ? 'bg-drape-gold text-drape-obsidian border-drape-gold font-medium'
+                    : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-drape-gold/50'"
+                  @click="profile.gender = g"
+                >{{ g }}</button>
+              </div>
+            </div>
 
-          <!-- Photo grid -->
-          <div v-if="files.length > 0" class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
-            <div
-              v-for="f in files"
-              :key="f.id"
-              class="relative aspect-square rounded-xl overflow-hidden group"
-            >
-              <img :src="f.preview" :alt="f.type" class="w-full h-full object-cover" />
-              <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                <button
-                  class="text-white text-xs font-medium bg-red-500/80 px-3 py-1 rounded-full"
-                  @click.stop="removeFile(f.id)"
+            <!-- Age / Height / Weight -->
+            <div class="grid grid-cols-3 gap-4">
+              <div>
+                <label class="block text-sm font-medium mb-1.5">Age</label>
+                <input v-model.number="profile.age" type="number" min="13" max="99"
+                  placeholder="25" class="input" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1.5">Height (cm)</label>
+                <input v-model.number="profile.height_cm" type="number" min="100" max="250"
+                  placeholder="170" class="input" />
+              </div>
+              <div>
+                <label class="block text-sm font-medium mb-1.5">Weight (kg)</label>
+                <input v-model.number="profile.weight_kg" type="number" min="30" max="300"
+                  placeholder="65" class="input" />
+              </div>
+            </div>
+
+            <!-- Usual size -->
+            <div>
+              <label class="block text-sm font-medium mb-3">Usual clothing size</label>
+              <div class="flex flex-wrap gap-2">
+                <button v-for="sz in SIZES" :key="sz"
+                  class="w-14 py-2 rounded-xl text-sm border font-medium transition-all duration-150"
+                  :class="profile.usual_size === sz
+                    ? 'bg-drape-gold text-drape-obsidian border-drape-gold'
+                    : 'border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-drape-gold/50'"
+                  @click="profile.usual_size = sz"
+                >{{ sz }}</button>
+              </div>
+            </div>
+
+            <!-- Skin tone -->
+            <div>
+              <label class="block text-sm font-medium mb-3">Skin tone</label>
+              <div class="flex flex-wrap gap-3">
+                <button v-for="tone in SKIN_TONES" :key="tone.value"
+                  class="flex flex-col items-center gap-1.5 group"
+                  @click="profile.skin_tone = tone.value"
                 >
-                  Remove
+                  <div
+                    class="w-10 h-10 rounded-full border-2 transition-all duration-150"
+                    :style="{ backgroundColor: tone.hex }"
+                    :class="profile.skin_tone === tone.value
+                      ? 'border-drape-gold scale-110 shadow-lg'
+                      : 'border-transparent group-hover:border-drape-gold/40'"
+                  />
+                  <span class="text-[10px] text-[var(--color-text-muted)] leading-tight text-center w-12">
+                    {{ tone.label }}
+                  </span>
                 </button>
               </div>
-              <div v-if="f.error" class="absolute bottom-0 left-0 right-0 bg-red-500/80 text-white text-xs p-1 text-center">
-                {{ f.error }}
+            </div>
+
+            <!-- Body type (visual, gender-specific) -->
+            <div v-if="profile.gender">
+              <label class="block text-sm font-medium mb-1">Body type</label>
+              <p class="text-xs text-[var(--color-text-muted)] mb-4">
+                Don't worry — our AI will verify this from your photos automatically.
+              </p>
+              <div class="grid grid-cols-5 gap-3">
+                <button
+                  v-for="bt in bodyTypeOptions"
+                  :key="bt.value"
+                  class="flex flex-col items-center gap-2 p-3 rounded-2xl border-2 transition-all duration-150 group"
+                  :class="profile.usual_size /* placeholder — body type not in profile form, AI detects it */
+                    ? 'border-[var(--color-border)] hover:border-drape-gold/40'
+                    : 'border-[var(--color-border)] hover:border-drape-gold/40'"
+                  :title="bt.desc"
+                >
+                  <!-- SVG icon -->
+                  <div class="w-10 h-14 text-[var(--color-text-muted)] group-hover:text-drape-gold transition-colors">
+                    <svg v-if="bt.svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
+                      class="w-full h-full" v-html="bt.svg" />
+                    <!-- Text fallback for non-binary -->
+                    <div v-else class="w-full h-full flex items-center justify-center text-2xl">
+                      🧍
+                    </div>
+                  </div>
+                  <span class="text-[11px] font-medium text-center leading-tight">{{ bt.label }}</span>
+                  <span class="text-[10px] text-[var(--color-text-muted)] text-center leading-tight hidden group-hover:block">{{ bt.desc }}</span>
+                </button>
               </div>
-              <div class="absolute top-2 left-2 bg-drape-obsidian/60 text-drape-cream text-xs px-2 py-0.5 rounded-full">
-                {{ photoLabels[f.type] }}
+              <p class="text-xs text-drape-gold mt-3 flex items-center gap-1.5">
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Gemini will detect your actual body type from your photos
+              </p>
+            </div>
+          </div>
+
+          <div class="mt-10">
+            <DrapeButton
+              variant="gold"
+              size="lg"
+              :disabled="!profileValid"
+              class="w-full"
+              @click="saveProfile"
+            >
+              Continue to photos →
+            </DrapeButton>
+          </div>
+        </div>
+
+        <!-- ── Step 2: Upload ──────────────────────────────────────── -->
+        <div v-else-if="step === 'upload'" key="upload" class="animate-fadeUp">
+          <h1 class="font-display text-3xl font-semibold mb-2">Upload your photos</h1>
+          <p class="text-[var(--color-text-muted)] mb-8">
+            Take 6 clear photos — our AI needs each angle to build an accurate model of you.
+          </p>
+
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-8">
+            <div v-for="slot in slots" :key="slot.type" class="flex flex-col gap-2">
+              <!-- Hidden file input -->
+              <input
+                :ref="el => slotInputRefs[slot.type] = el as HTMLInputElement"
+                type="file"
+                accept="image/*"
+                class="hidden"
+                @change="(e) => handleSlotInput(e, slot.type)"
+              />
+
+              <!-- Upload card -->
+              <div
+                class="relative aspect-[3/4] rounded-2xl border-2 overflow-hidden cursor-pointer transition-all duration-200 group"
+                :class="slot.file?.error
+                  ? 'border-red-400'
+                  : slot.file
+                    ? 'border-drape-gold'
+                    : 'border-dashed border-[var(--color-border)] hover:border-drape-gold/50'"
+                @click="triggerSlotInput(slot.type)"
+              >
+                <!-- Preview -->
+                <img v-if="slot.file && !slot.file.error"
+                  :src="slot.file.preview"
+                  :alt="slot.label"
+                  class="w-full h-full object-cover"
+                />
+
+                <!-- Empty state -->
+                <div v-else class="w-full h-full flex flex-col items-center justify-center gap-2 p-3">
+                  <svg class="w-8 h-8 text-[var(--color-text-muted)] opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path :d="SILHOUETTES[slot.type]" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <p class="text-[10px] text-center text-[var(--color-text-muted)] leading-snug">{{ slot.hint }}</p>
+                </div>
+
+                <!-- Remove button -->
+                <button v-if="slot.file"
+                  class="absolute top-2 right-2 w-6 h-6 rounded-full bg-drape-obsidian/70 text-white text-xs
+                         flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  @click.stop="clearSlot(slot.type)"
+                >✕</button>
+
+                <!-- Check badge -->
+                <div v-if="slot.file && !slot.file.error"
+                  class="absolute bottom-2 right-2 w-6 h-6 rounded-full bg-drape-gold text-drape-obsidian
+                         flex items-center justify-center text-xs font-bold"
+                >✓</div>
+              </div>
+
+              <div>
+                <p class="text-xs font-medium text-center">{{ slot.label }}</p>
+                <p class="text-[10px] text-center text-[var(--color-text-muted)]">{{ slot.description }}</p>
+                <p v-if="slot.file?.error" class="text-[10px] text-red-500 text-center mt-0.5">{{ slot.file.error }}</p>
               </div>
             </div>
           </div>
 
-          <p class="text-sm text-[var(--color-text-muted)] mb-6">
-            {{ validFiles.length }}/4 required photos uploaded
+          <p class="text-sm text-center text-[var(--color-text-muted)] mb-6">
+            {{ filledCount }}/6 photos ready
           </p>
 
           <DrapeButton
             variant="gold"
             size="lg"
-            :disabled="!canProceed"
+            :disabled="!allSlotsFilled"
             class="w-full"
             @click="uploadAndGenerate"
           >
@@ -150,48 +506,139 @@ function proceed() {
           </DrapeButton>
         </div>
 
-        <!-- Step 2: Generating -->
+        <!-- ── Step 3: Generating ───────────────────────────────────── -->
         <div v-else-if="step === 'generating'" key="generating" class="text-center py-16 animate-fadeUp">
-          <div class="w-20 h-20 rounded-full bg-drape-gold/10 flex items-center justify-center mx-auto mb-8">
+          <div class="w-24 h-24 rounded-full bg-drape-gold/10 flex items-center justify-center mx-auto mb-8">
             <DrapeSpinner size="lg" />
           </div>
-          <h2 class="font-display text-2xl font-semibold mb-3">Creating your digital identity</h2>
-          <p class="text-[var(--color-text-muted)]">
-            Our AI is analyzing your photos and building your personalized model...
+          <h2 class="font-display text-2xl font-semibold mb-3">{{ generatingMessage }}</h2>
+          <p class="text-[var(--color-text-muted)] text-sm max-w-sm mx-auto">
+            Gemini is analyzing your photos, detecting your body type, and generating 10 AI angle variations.
+            This takes about 60–90 seconds.
           </p>
-          <div class="flex justify-center gap-1 mt-6">
-            <span v-for="i in 3" :key="i" class="w-2 h-2 rounded-full bg-drape-gold animate-pulse" :style="`animation-delay: ${i * 0.2}s`" />
+          <div class="flex justify-center gap-2 mt-8">
+            <span v-for="i in 3" :key="i"
+              class="w-2 h-2 rounded-full bg-drape-gold animate-pulse"
+              :style="`animation-delay: ${i * 0.25}s`"
+            />
           </div>
         </div>
 
-        <!-- Step 3: Confirm -->
-        <div v-else-if="step === 'confirm'" key="confirm" class="animate-fadeUp">
-          <h1 class="font-display text-3xl font-semibold mb-2">Your identity is ready</h1>
+        <!-- ── Step 4: Angles gallery ───────────────────────────────── -->
+        <div v-else-if="step === 'angles'" key="angles" class="animate-fadeUp">
+          <div class="flex items-start justify-between mb-2">
+            <div>
+              <h1 class="font-display text-3xl font-semibold">Your AI angles</h1>
+              <p class="text-[var(--color-text-muted)] mt-1">
+                Gemini generated {{ angleImages.length }} views of you. These are used to create your try-on portraits.
+              </p>
+            </div>
+            <!-- Detected body type badge -->
+            <div v-if="detectedBodyType"
+              class="flex-shrink-0 ml-4 px-4 py-2 rounded-2xl bg-drape-gold/10 border border-drape-gold/30 text-center"
+            >
+              <p class="text-[10px] text-drape-gold uppercase tracking-widest font-medium">Body type detected</p>
+              <p class="text-sm font-semibold capitalize mt-0.5">{{ detectedBodyType }}</p>
+            </div>
+          </div>
+
+          <!-- Angles grid -->
+          <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-6 mb-8">
+            <div
+              v-for="(img, i) in angleImages"
+              :key="img.key"
+              class="flex flex-col gap-1.5"
+            >
+              <div class="aspect-[3/4] rounded-xl overflow-hidden bg-[var(--color-border)] group relative">
+                <img
+                  :src="img.image_url"
+                  :alt="ANGLE_LABELS[i] || `Angle ${i + 1}`"
+                  class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                  loading="lazy"
+                />
+                <div class="absolute inset-0 bg-drape-obsidian/0 group-hover:bg-drape-obsidian/20 transition-all duration-200" />
+              </div>
+              <p class="text-[10px] text-center text-[var(--color-text-muted)] font-medium">
+                {{ ANGLE_LABELS[i] || `View ${i + 1}` }}
+              </p>
+            </div>
+
+            <!-- Skeleton placeholders if fewer than 10 came back -->
+            <div
+              v-for="i in Math.max(0, 10 - angleImages.length)"
+              :key="`skel-${i}`"
+              class="aspect-[3/4] rounded-xl bg-[var(--color-border)] animate-pulse"
+            />
+          </div>
+
+          <DrapeButton variant="gold" size="lg" class="w-full" @click="proceedToPick">
+            Choose your portrait →
+          </DrapeButton>
+        </div>
+
+        <!-- ── Step 5: Pick portrait ────────────────────────────────── -->
+        <div v-else-if="step === 'pick'" key="pick" class="animate-fadeUp">
+          <h1 class="font-display text-3xl font-semibold mb-2">Choose your identity</h1>
           <p class="text-[var(--color-text-muted)] mb-8">
-            This is how you'll appear in virtual try-ons. Happy with it?
+            Pick the portrait that looks most like you — this is how you'll appear in try-ons.
           </p>
 
-          <div class="card p-4 mb-8 max-w-xs mx-auto">
-            <img
-              v-if="generatedIdentity?.image_url"
-              :src="generatedIdentity.image_url"
-              alt="Your AI identity"
-              class="w-full rounded-xl aspect-[3/4] object-cover"
-            />
-            <div v-else class="aspect-[3/4] rounded-xl bg-drape-gold/10 flex items-center justify-center">
-              <span class="text-4xl">👤</span>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+            <div
+              v-for="c in candidates"
+              :key="c.key"
+              class="cursor-pointer group relative"
+              @click="selectCandidate(c)"
+            >
+              <div
+                class="aspect-[3/4] rounded-2xl overflow-hidden border-2 transition-all duration-200"
+                :class="selectedCandidate?.key === c.key
+                  ? 'border-drape-gold shadow-lg shadow-drape-gold/20 scale-[1.02]'
+                  : 'border-transparent hover:border-drape-gold/40'"
+              >
+                <img :src="c.image_url" alt="Portrait candidate"
+                  class="w-full h-full object-cover" />
+              </div>
+              <!-- Selected check -->
+              <div v-if="selectedCandidate?.key === c.key"
+                class="absolute top-2 right-2 w-7 h-7 rounded-full bg-drape-gold text-drape-obsidian
+                       flex items-center justify-center text-sm font-bold shadow"
+              >✓</div>
             </div>
           </div>
 
           <div class="flex gap-3">
-            <DrapeButton variant="ghost" class="flex-1" @click="step = 'upload'">
-              Retake photos
+            <DrapeButton variant="ghost" class="flex-1" @click="step = 'angles'">
+              ← Back
             </DrapeButton>
-            <DrapeButton variant="gold" class="flex-1" @click="proceed">
-              Start trying on →
+            <DrapeButton
+              variant="gold"
+              class="flex-1"
+              :disabled="!selectedCandidate"
+              @click="confirmSelection"
+            >
+              Use this identity →
             </DrapeButton>
           </div>
         </div>
+
+        <!-- ── Step 6: Done ────────────────────────────────────────── -->
+        <div v-else-if="step === 'done'" key="done" class="text-center py-16 animate-fadeUp">
+          <div class="w-20 h-20 rounded-full bg-drape-gold/20 flex items-center justify-center mx-auto mb-6 text-3xl">
+            ✨
+          </div>
+          <h2 class="font-display text-3xl font-semibold mb-3">You're all set!</h2>
+          <p class="text-[var(--color-text-muted)] mb-2">Your AI identity is ready.</p>
+          <p v-if="detectedBodyType" class="text-sm text-drape-gold mb-8">
+            Body type detected: <span class="font-semibold capitalize">{{ detectedBodyType }}</span>
+          </p>
+          <div class="flex flex-col sm:flex-row gap-3 justify-center">
+            <RouterLink to="/catalog">
+              <DrapeButton variant="gold" size="lg">Start trying on →</DrapeButton>
+            </RouterLink>
+          </div>
+        </div>
+
       </Transition>
     </div>
   </div>

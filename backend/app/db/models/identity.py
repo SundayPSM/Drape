@@ -19,7 +19,7 @@ class UserIdentity(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
-    status: Mapped[IdentityStatus] = mapped_column(SAEnum(IdentityStatus), default=IdentityStatus.pending)
+    status: Mapped[IdentityStatus] = mapped_column(SAEnum(IdentityStatus, name="identity_status"), default=IdentityStatus.pending)
     s3_key: Mapped[str | None] = mapped_column(String(500), nullable=True)  # generated canonical image
     source_photo_ids: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # JSON list of photo IDs
     replicate_prediction_id: Mapped[str | None] = mapped_column(String(100), nullable=True)

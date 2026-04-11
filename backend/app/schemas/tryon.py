@@ -5,9 +5,21 @@ from app.db.models.tryon_job import TryOnStatus
 from app.schemas.product import ProductResponse
 
 
+class GarmentItem(BaseModel):
+    image_url: str
+    source_url: str
+    category: str
+    name: str | None = None
+    fit: str = "regular"  # slim | regular | oversized
+
+
 class TryOnSubmitRequest(BaseModel):
-    product_id: uuid.UUID
+    product_id: uuid.UUID        # primary garment (for the job record FK)
     identity_id: uuid.UUID
+    fit: str = "regular"
+    extra_garments: list[GarmentItem] = []  # additional outfit pieces
+    pose_image_url: str | None = None  # reference photo for pose + expression
+    base_image_url: str | None = None  # previous result image for iterative layering
 
 
 class TryOnJobResponse(BaseModel):

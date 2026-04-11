@@ -60,6 +60,28 @@ async function shareResult() {
   const url = `${window.location.origin}/s/${job.value?.share_slug || job.value?.id}`
   await share('Check out my look on Drape', 'I tried this on with Drape AI virtual try-on!', url)
 }
+
+function addMoreToLook() {
+  if (!job.value?.result_url) return
+  tryonStore.buildOnResult(job.value.result_url)
+  router.push('/try-on')
+}
+
+async function downloadResult() {
+  if (!job.value?.result_url) return
+  try {
+    const res = await fetch(job.value.result_url)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `drape-look-${job.value.id.slice(0, 8)}.jpg`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch {
+    window.open(job.value.result_url, '_blank')
+  }
+}
 </script>
 
 <template>
@@ -134,8 +156,8 @@ async function shareResult() {
               </DrapeButton>
             </a>
 
-            <!-- Save / Share -->
-            <div class="flex gap-3">
+            <!-- Save / Download / Share -->
+            <div class="flex gap-2">
               <DrapeButton
                 variant="ghost"
                 class="flex-1"
@@ -143,15 +165,23 @@ async function shareResult() {
                 :disabled="job.is_saved"
                 @click="saveLook"
               >
-                {{ job.is_saved ? '✓ Saved' : 'Save look' }}
+                {{ job.is_saved ? '✓ Saved' : 'Save' }}
+              </DrapeButton>
+              <DrapeButton variant="ghost" class="flex-1" @click="downloadResult">
+                Download
               </DrapeButton>
               <DrapeButton variant="ghost" class="flex-1" @click="shareResult">
                 Share
               </DrapeButton>
             </div>
 
+            <!-- Add more to this look -->
+            <DrapeButton variant="gold" class="w-full" @click="addMoreToLook">
+              + Add more to this look
+            </DrapeButton>
+
             <!-- Try more -->
-            <div class="pt-2">
+            <div>
               <RouterLink to="/catalog">
                 <DrapeButton variant="ghost" class="w-full">Browse more items</DrapeButton>
               </RouterLink>

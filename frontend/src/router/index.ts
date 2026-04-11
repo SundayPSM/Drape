@@ -75,8 +75,12 @@ const router = createRouter({
 
 // Auth guard — uses Supabase session
 router.beforeEach(async (to) => {
+  // getSession() reads from localStorage — fast, no network call
   const { data } = await supabase.auth.getSession()
   const authenticated = !!data.session
+
+  // Always allow the callback route through so Supabase can process tokens
+  if (to.name === 'auth-callback') return true
 
   if (!to.meta.public && !authenticated) {
     return { name: 'login', query: { redirect: to.fullPath } }

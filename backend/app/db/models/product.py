@@ -25,7 +25,7 @@ class Product(Base):
     name: Mapped[str] = mapped_column(String(300), nullable=False)
     brand: Mapped[str | None] = mapped_column(String(100), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    category: Mapped[ProductCategory] = mapped_column(SAEnum(ProductCategory), default=ProductCategory.tops)
+    category: Mapped[ProductCategory] = mapped_column(SAEnum(ProductCategory, name="product_category"), default=ProductCategory.tops)
     price: Mapped[float | None] = mapped_column(Float, nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     image_s3_key: Mapped[str | None] = mapped_column(String(500), nullable=True)

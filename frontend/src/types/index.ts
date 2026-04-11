@@ -3,7 +3,29 @@ export interface User {
   email: string
   name: string
   avatar_url: string | null
+  gender: string | null
+  age: number | null
+  height_cm: number | null
+  weight_kg: number | null
+  usual_size: string | null
+  skin_tone: string | null
+  body_type: string | null
   created_at: string
+}
+
+export interface GenerationResult {
+  body_type: string
+  angles: { key: string; image_url: string }[]
+  candidates: { key: string; image_url: string }[]
+}
+
+export interface ProfileUpdate {
+  gender?: string
+  age?: number
+  height_cm?: number
+  weight_kg?: number
+  usual_size?: string
+  skin_tone?: string
 }
 
 export interface UserPhoto {
@@ -47,6 +69,7 @@ export type ProductCategory =
   | 'watches'
   | 'sunglasses'
 
+export type TryOnFit = 'slim' | 'regular' | 'oversized'
 export type TryOnStatus = 'pending' | 'processing' | 'completed' | 'failed'
 
 export interface TryOnJob {

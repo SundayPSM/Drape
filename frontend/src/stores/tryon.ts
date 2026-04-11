@@ -10,6 +10,8 @@ export const useTryOnStore = defineStore('tryon', () => {
   const resultUrl = ref<string | null>(null)
   const history = ref<TryOnJob[]>([])
   const loading = ref(false)
+  // Iterative layering — result image carried into the next try-on as the person base
+  const baseResultUrl = ref<string | null>(null)
 
   const savedLooks = computed(() => history.value.filter((j) => j.is_saved))
   const completedJobs = computed(() => history.value.filter((j) => j.status === 'completed'))
@@ -34,6 +36,14 @@ export const useTryOnStore = defineStore('tryon', () => {
     resultUrl.value = null
   }
 
+  function buildOnResult(imageUrl: string) {
+    baseResultUrl.value = imageUrl
+  }
+
+  function clearBaseResult() {
+    baseResultUrl.value = null
+  }
+
   function updateJobStatus(status: TryOnStatus, url: string | null = null) {
     activeStatus.value = status
     if (url) resultUrl.value = url
@@ -44,6 +54,7 @@ export const useTryOnStore = defineStore('tryon', () => {
     activeJobId,
     activeStatus,
     resultUrl,
+    baseResultUrl,
     history,
     loading,
     savedLooks,
@@ -53,5 +64,7 @@ export const useTryOnStore = defineStore('tryon', () => {
     saveLook,
     setActiveJob,
     updateJobStatus,
+    buildOnResult,
+    clearBaseResult,
   }
 })

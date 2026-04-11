@@ -93,8 +93,8 @@ onMounted(async () => {
 <script lang="ts">
 const quickActions = [
   { to: '/catalog', icon: '🛍️', title: 'Browse catalog', desc: 'Explore curated items' },
-  { to: '/catalog', icon: '🔗', title: 'Paste a URL', desc: 'Try any product online' },
-  { to: '/closet', icon: '👗', title: 'My closet', desc: 'Saved looks' },
+  { to: '/try-on', icon: '🔗', title: 'Paste a URL', desc: 'Try any product online' },
+  { to: '/closet', icon: '👗', title: 'My looks', desc: 'All tried garments' },
   { to: '/onboarding', icon: '📸', title: 'Update photos', desc: 'Refresh your identity' },
 ]
 </script>

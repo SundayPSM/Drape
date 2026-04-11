@@ -6,25 +6,23 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.api.router import router
-from app.db.base import engine, Base
+from app.db.base import engine
 from app.core.exceptions import DomainError
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: create tables (use Alembic migrations in production)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Tables are created via Supabase dashboard / Alembic migrations
+    # No auto-DDL here
     yield
-    # Shutdown
     await engine.dispose()
 
 
 app = FastAPI(
     title=settings.app_title,
     version=settings.app_version,
-    docs_url="/docs" if settings.debug else None,
-    redoc_url="/redoc" if settings.debug else None,
+    docs_url="/docs",
+    redoc_url=None,
     lifespan=lifespan,
 )
 
@@ -55,3 +53,20 @@ app.include_router(router, prefix="/api/v1")
 @app.get("/health")
 async def health():
     return {"status": "ok", "version": settings.app_version}
+
+
+@app.post("/debug/token")
+async def debug_token(request: Request):
+    """Temporary: decode a Supabase token and show the result. Remove before prod."""
+    from app.core.security import decode_supabase_token
+    body = await request.json()
+    token = body.get("token", "")
+    payload = decode_supabase_token(token)
+    return {
+        "decoded": bool(payload),
+        "sub": payload.get("sub"),
+        "email": payload.get("email"),
+        "role": payload.get("role"),
+        "aud": payload.get("aud"),
+        "alg": payload.get("_claim_names"),
+    }

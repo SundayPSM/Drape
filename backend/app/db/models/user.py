@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Boolean, DateTime
+from sqlalchemy import String, Boolean, DateTime, SmallInteger
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
@@ -15,6 +15,13 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    gender: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    age: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    height_cm: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    weight_kg: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    usual_size: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    skin_tone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    body_type: Mapped[str | None] = mapped_column(String(30), nullable=True)  # detected by AI
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

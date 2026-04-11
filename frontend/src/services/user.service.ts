@@ -1,10 +1,15 @@
 import api from './api'
-import type { User, UserPhoto, UserIdentity } from '@/types'
+import type { User, UserPhoto, UserIdentity, ProfileUpdate } from '@/types'
 
 export const userService = {
   async getMe(): Promise<User> {
     const { data } = await api.get<User>('/api/v1/users/me')
     return data
+  },
+
+  async updateProfile(data: ProfileUpdate): Promise<User> {
+    const { data: user } = await api.patch<User>('/api/v1/users/me/profile', data)
+    return user
   },
 
   async getMyPhotos(): Promise<UserPhoto[]> {
@@ -19,13 +24,14 @@ export const userService = {
     return data
   },
 
-  async uploadPhotoToS3(presigned: any, file: File): Promise<void> {
-    const formData = new FormData()
-    Object.entries(presigned.fields as Record<string, string>).forEach(([k, v]) => {
-      formData.append(k, v)
+  async uploadPhotoToStorage(presigned: any, file: File): Promise<void> {
+    // Supabase Storage signed upload: PUT with raw file body
+    const res = await fetch(presigned.url, {
+      method: 'PUT',
+      body: file,
+      headers: { 'Content-Type': file.type || 'image/jpeg' },
     })
-    formData.append('file', file)
-    await fetch(presigned.url, { method: 'POST', body: formData })
+    if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
   },
 
   async getMyIdentity(): Promise<UserIdentity | null> {
@@ -33,8 +39,20 @@ export const userService = {
     return data
   },
 
-  async generateIdentity(photoIds: string[]): Promise<UserIdentity> {
-    const { data } = await api.post<UserIdentity>('/api/v1/users/me/identity/generate', photoIds)
+  async generateIdentityCandidates(photoIds: string[]): Promise<{
+    body_type: string
+    angles: { key: string; image_url: string }[]
+    candidates: { key: string; image_url: string }[]
+  }> {
+    const { data } = await api.post('/api/v1/users/me/identity/generate', photoIds)
+    return data
+  },
+
+  async confirmIdentity(s3Key: string, photoIds: string[]): Promise<UserIdentity> {
+    const { data } = await api.post<UserIdentity>('/api/v1/users/me/identity/confirm', {
+      s3_key: s3Key,
+      photo_ids: photoIds,
+    })
     return data
   },
 }

@@ -1,25 +1,34 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
+# Always resolve .env from the project root, regardless of where uvicorn is run from
+# backend/app/config.py → backend/app → backend → Drape (root)
+ROOT_ENV = Path(__file__).parent.parent.parent / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=str(ROOT_ENV), extra="ignore")
 
     # App
     app_title: str = "Drape API"
     app_version: str = "1.0.0"
     debug: bool = False
 
-    # Database (Supabase PostgreSQL)
-    database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/postgres"
+    # Database (Supabase remote PostgreSQL)
+    database_url: str = ""
 
-    # Supabase Auth
+    # Supabase Auth + Storage
     supabase_url: str = ""
     supabase_anon_key: str = ""
-    supabase_jwt_secret: str = ""  # used to verify tokens server-side
+    supabase_jwt_secret: str = ""
+    supabase_service_role_key: str = ""
 
     # Redis / Celery
     redis_url: str = "redis://localhost:6379/0"
+
+    # Google Gemini (Nano Banana 2) — image generation
+    google_api_key: str = ""
 
     # Replicate
     replicate_api_token: str = ""

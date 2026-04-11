@@ -1,7 +1,5 @@
-version: "3.9"
-
-# Postgres is removed — using Supabase remote DB
-# Only Redis runs locally for Celery task queue
+# Postgres: Supabase remote — no local DB needed
+# Redis: local container for Celery task queue
 
 services:
   redis:
@@ -23,6 +21,9 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      # Override localhost → Docker service name so backend reaches Redis container
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
@@ -30,29 +31,17 @@ services:
       - ./backend:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-  worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    env_file: .env
-    depends_on:
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./backend:/app
-    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
-
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
       - "5173:5173"
-    env_file: .env
     volumes:
+      # Mount source for hot-reload; preserve container node_modules
       - ./frontend:/app
       - /app/node_modules
-    command: npm run dev -- --host
+    command: npm run dev -- --host 0.0.0.0
 
 volumes:
   redis_data:

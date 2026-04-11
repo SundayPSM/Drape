@@ -1,38 +1,45 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { supabase } from '@/services/supabase'
 import { authService } from '@/services/auth.service'
 import { userService } from '@/services/user.service'
 import type { User } from '@/types'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
+  // Supabase session exists = authenticated (for routing)
+  // user.value = our app's DB record (for display)
+  const supabaseSession = ref<any>(null)
   const loading = ref(false)
 
-  const isAuthenticated = computed(() => !!user.value)
+  const isAuthenticated = computed(() => !!supabaseSession.value)
 
   async function init() {
-    // Listen for Supabase auth state changes (handles page refresh, OAuth callback)
-    authService.onAuthStateChange(async (supabaseUser) => {
-      if (supabaseUser) {
-        try {
-          // Fetch our app's user record (created/upserted by backend on first login)
-          user.value = await userService.getMe()
-        } catch {
-          user.value = null
-        }
+    // Get current session immediately
+    const { data } = await supabase.auth.getSession()
+    supabaseSession.value = data.session
+    if (data.session) {
+      fetchAppUser()
+    }
+
+    // Keep in sync on auth changes
+    supabase.auth.onAuthStateChange((_event, session) => {
+      supabaseSession.value = session
+      if (session) {
+        fetchAppUser()
       } else {
         user.value = null
       }
     })
+  }
 
-    // Also check current session immediately on app start
-    const session = await authService.getSession()
-    if (session) {
-      try {
-        user.value = await userService.getMe()
-      } catch {
-        user.value = null
-      }
+  // Fetch our app's user record from the backend (non-blocking)
+  async function fetchAppUser() {
+    try {
+      user.value = await userService.getMe()
+    } catch {
+      // Backend unavailable — keep supabaseSession as auth source of truth
+      // User will still be able to navigate, just won't have profile data
     }
   }
 
@@ -40,7 +47,6 @@ export const useAuthStore = defineStore('auth', () => {
     loading.value = true
     try {
       await authService.signInWithGoogle()
-      // Page will redirect to Google — user.value is set in onAuthStateChange on return
     } finally {
       loading.value = false
     }
@@ -48,8 +54,9 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function logout() {
     await authService.signOut()
+    supabaseSession.value = null
     user.value = null
   }
 
-  return { user, loading, isAuthenticated, init, loginWithGoogle, logout }
+  return { user, loading, isAuthenticated, supabaseSession, init, loginWithGoogle, logout }
 })

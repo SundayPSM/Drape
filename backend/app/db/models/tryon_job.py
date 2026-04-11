@@ -23,7 +23,7 @@ class TryOnJob(Base):
     identity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("user_identities.id"))
 
     replicate_prediction_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
-    status: Mapped[TryOnStatus] = mapped_column(SAEnum(TryOnStatus), default=TryOnStatus.pending)
+    status: Mapped[TryOnStatus] = mapped_column(SAEnum(TryOnStatus, name="tryon_status"), default=TryOnStatus.pending)
 
     human_img_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     garment_img_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)

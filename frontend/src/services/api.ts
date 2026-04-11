@@ -4,7 +4,7 @@ import { supabase } from './supabase'
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
   headers: { 'Content-Type': 'application/json' },
-  timeout: 30000,
+  timeout: 300000, // 5 min — AI generation can take a while
 })
 
 // Attach Supabase access token to every request
