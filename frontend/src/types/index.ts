@@ -82,6 +82,8 @@ export interface TryOnJob {
   share_slug: string | null
   created_at: string
   completed_at: string | null
+  fit_confidence: number | null
+  fit_notes: string | null
 }
 
 export interface TryOnStatusResponse {

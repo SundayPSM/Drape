@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, ForeignKey, Enum as SAEnum, Boolean, Text
+from sqlalchemy import String, DateTime, ForeignKey, Enum as SAEnum, Boolean, Text, Float
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 import enum
@@ -32,6 +32,9 @@ class TryOnJob(Base):
     result_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    fit_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fit_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     is_saved: Mapped[bool] = mapped_column(Boolean, default=False)
     share_slug: Mapped[str | None] = mapped_column(String(50), unique=True, nullable=True)

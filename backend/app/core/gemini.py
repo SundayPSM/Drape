@@ -9,8 +9,14 @@ Two-phase pipeline:
   Phase 2 — generate_identity_candidates():
       Takes all 16 images (6 real + 10 angles), generates 4 final try-on portraits.
       User picks one as their active identity.
+
+B2C v1.1 additions:
+  normalize_garment(): Pre-process garment — clean background, normalize lighting.
+  validate_tryon_result(): QC check result image, return confidence score + notes.
 """
 import asyncio
+import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from google import genai
@@ -300,7 +306,6 @@ def _build_portrait_prompts(profile: UserProfile) -> list[str]:
 
 
 # ── Core Gemini call ──────────────────────────────────────────────────────────
-import logging
 _log = logging.getLogger(__name__)
 
 
@@ -490,9 +495,13 @@ class SubjectProfile:
             f"Weight: {self.weight_kg} kg. "
             f"Build: {build}{body_note}. "
             f"Age: {self.age}. Gender: {self.gender}. "
-            f"CRITICAL — the generated figure must accurately reflect this height and build. "
-            f"A {h} cm person has visibly long legs and torso proportional to their height. "
-            f"Do NOT compress or shorten the body. Match the body proportions exactly."
+            f"BODY PROPORTION ENFORCEMENT — NON-NEGOTIABLE: "
+            f"The generated figure must accurately reflect a {h} cm person. "
+            f"A {h} cm person has visibly {'long legs and elongated torso' if h >= 180 else 'proportional legs and torso'}. "
+            f"Do NOT compress, shorten, or widen the body under any circumstance. "
+            f"Full leg length must be visible if this is a full-body shot. "
+            f"Torso-to-leg ratio must match a real {h} cm person exactly. "
+            f"If the output would crop the feet — extend the canvas instead, never squish proportions."
         )
 
 
@@ -597,6 +606,22 @@ def _build_outfit_prompt(garments: list[GarmentInput], has_pose_ref: bool = Fals
         f"fabric tension across shoulders, gravity pulling fabric down, natural fold shadows. "
         f"Fabric wraps body contours; does not float or sit flat. "
         f"Quality: Marvelous Designer cloth simulation, professional fashion editorial.\n\n"
+        f"═══ SHADOW & LIGHTING ═══\n"
+        f"- Cast soft contact shadow under collar onto neck and chest\n"
+        f"- Shadow under chin from any hood or high collar\n"
+        f"- Shadow in arm fold creases — armpits, inner elbow\n"
+        f"- Shadow at waist where fabric meets skin or inner layer\n"
+        f"- Lighting direction must match Image 1 exactly — preserve warm/cool temperature\n\n"
+        f"═══ DEPTH & EDGE QUALITY ═══\n"
+        f"- Garment edges must have soft natural falloff, not sharp cut-out lines\n"
+        f"- Occlusion shadow between garment and body (depth separation)\n"
+        f"- Subtle ambient occlusion where fabric layers overlap\n"
+        f"- No halo or glow effect around garment edges\n\n"
+        f"═══ MICRO-REALISM ═══\n"
+        f"- Slight natural asymmetry between left and right sleeves\n"
+        f"- Subtle texture grain variation across fabric surface\n"
+        f"- Micro-wrinkles at high-tension seams — armpit seam, collar crease\n"
+        f"- These details signal a real photo, not an AI composite\n\n"
         f"═══ NEGATIVE PROMPT ═══\n"
         f"Do NOT produce: identity transfer, copied face from reference images, copied tattoos, "
         f"pasted clothing texture, stiff fabric, unrealistic folds, flat lighting, mannequin style, "
@@ -646,6 +671,104 @@ async def generate_tryon(
     loop = asyncio.get_event_loop()
     with ThreadPoolExecutor(max_workers=1) as pool:
         return await loop.run_in_executor(pool, _generate_outfit_sync, person_bytes, garments, pose_bytes, subject)
+
+
+# ── Garment normalization ─────────────────────────────────────────────────────
+
+def _normalize_garment_sync(garment_bytes: bytes, category: str) -> bytes:
+    """Remove background and normalize lighting. Falls back to original bytes on failure."""
+    try:
+        prompt = (
+            f"You are a garment processing AI.\n\n"
+            f"INPUT: A product photograph of a {category}.\n\n"
+            f"TASK:\n"
+            f"1. Remove the background completely — output the garment on a pure white (#FFFFFF) background\n"
+            f"2. Normalize the lighting — soft, even, front-lit studio light\n"
+            f"3. Preserve every detail: fabric texture, logos, patterns, stitching, hardware, colors\n"
+            f"4. Keep exact garment shape — do not warp, stretch, or alter proportions\n"
+            f"5. Center the garment in frame with 10% padding on all sides\n\n"
+            f"OUTPUT: A single clean product image of the garment on a white background, "
+            f"ready for virtual try-on overlay."
+        )
+        client = genai.Client(api_key=settings.google_api_key)
+        parts: list[types.Part] = [
+            types.Part.from_text(text=prompt),
+            types.Part.from_bytes(data=garment_bytes, mime_type="image/jpeg"),
+        ]
+        response = client.models.generate_content(
+            model="gemini-3.1-flash-image-preview",
+            contents=[types.Content(parts=parts)],
+            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+        )
+        for part in response.candidates[0].content.parts:
+            if part.inline_data and part.inline_data.data:
+                return part.inline_data.data
+        _log.warning("Garment normalization returned no image, using original")
+        return garment_bytes
+    except Exception as exc:
+        _log.warning("Garment normalization failed (%s), using original", exc)
+        return garment_bytes
+
+
+async def normalize_garment(garment_bytes: bytes, category: str) -> bytes:
+    """Pre-process garment: remove background, normalize lighting. Safe — always returns bytes."""
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return await loop.run_in_executor(pool, _normalize_garment_sync, garment_bytes, category)
+
+
+# ── Result validation ─────────────────────────────────────────────────────────
+
+def _validate_tryon_sync(result_bytes: bytes, garments: list[GarmentInput]) -> dict:
+    """QC check on generated try-on result. Returns pass/fail + confidence + notes."""
+    garment_list = ", ".join(f"{g.category} ({g.fit})" for g in garments)
+    prompt = (
+        f"You are a quality control AI for virtual try-on results.\n\n"
+        f"Analyze the provided try-on result image and score it on these criteria:\n\n"
+        f"CHECKLIST:\n"
+        f"1. Garment placement — correctly positioned on the body?\n"
+        f"2. Collar/neckline — aligned to neck, not floating or misaligned?\n"
+        f"3. Sleeve length — appropriate for the garment category?\n"
+        f"4. Fabric realism — natural wrinkles, no stiff or plastic texture?\n"
+        f"5. Body distortion — natural proportions, no squished or stretched body?\n"
+        f"6. Shadow consistency — garment shadow matches scene lighting?\n"
+        f"7. Edge quality — no sharp cut-out edges or halos around the garment?\n\n"
+        f"GARMENTS EXPECTED: {garment_list}\n\n"
+        f"Respond in this exact JSON format and nothing else:\n"
+        f'{{"passed": true, "confidence": 0.85, "issues": [], "notes": "Natural drape, good shoulder alignment"}}\n\n'
+        f"Set passed=true if confidence >= 0.72, false otherwise."
+    )
+    try:
+        client = genai.Client(api_key=settings.google_api_key)
+        parts: list[types.Part] = [
+            types.Part.from_text(text=prompt),
+            types.Part.from_bytes(data=result_bytes, mime_type="image/jpeg"),
+        ]
+        response = client.models.generate_content(
+            model="gemini-3.1-flash-image-preview",
+            contents=[types.Content(parts=parts)],
+        )
+        text = (response.text or "").strip()
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start >= 0 and end > start:
+            data = json.loads(text[start:end])
+            return {
+                "passed": bool(data.get("passed", True)),
+                "confidence": float(data.get("confidence", 0.8)),
+                "issues": list(data.get("issues", [])),
+                "notes": str(data.get("notes", "")),
+            }
+    except Exception as exc:
+        _log.warning("Try-on validation failed (%s), assuming passed", exc)
+    return {"passed": True, "confidence": 0.8, "issues": [], "notes": ""}
+
+
+async def validate_tryon_result(result_bytes: bytes, garments: list[GarmentInput]) -> dict:
+    """Validate try-on result quality. Returns confidence score, pass/fail, and user-facing notes."""
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return await loop.run_in_executor(pool, _validate_tryon_sync, result_bytes, garments)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

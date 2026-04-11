@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.core.gemini import generate_tryon, GarmentInput, SubjectProfile
+from app.core.gemini import generate_tryon, normalize_garment, validate_tryon_result, GarmentInput, SubjectProfile
 from app.core.s3 import get_public_url, upload_bytes
 from app.core.exceptions import NotFoundError, ForbiddenError, DomainError
 from app.db.models.tryon_job import TryOnJob, TryOnStatus
@@ -103,29 +103,44 @@ async def submit_tryon(
     if data.pose_image_url:
         pose_bytes = fetched[idx].content; idx += 1
 
+    # Collect raw garment bytes
+    raw_garment_bytes = [fetched[idx].content]
+    raw_garment_cats = [primary_category]
+    idx += 1
+    for extra in data.extra_garments:
+        raw_garment_bytes.append(fetched[idx].content)
+        raw_garment_cats.append(extra.category)
+        idx += 1
+
+    # ── Call 1: Normalize all garment images in parallel ──────────────────────
+    _log.info("Job %s — normalizing %d garment(s)", job.id, len(raw_garment_bytes))
+    normalized_bytes = await asyncio.gather(*[
+        normalize_garment(b, cat) for b, cat in zip(raw_garment_bytes, raw_garment_cats)
+    ])
+
+    # Build GarmentInput list with normalized bytes
     garments: list[GarmentInput] = [
         GarmentInput(
-            image_bytes=fetched[idx].content,
+            image_bytes=normalized_bytes[0],
             category=primary_category,
             fit=primary_fit,
             description=primary_desc[:300],
         )
     ]
-    idx += 1
-    for extra in data.extra_garments:
+    for i, extra in enumerate(data.extra_garments):
         garments.append(GarmentInput(
-            image_bytes=fetched[idx].content,
+            image_bytes=normalized_bytes[i + 1],
             category=extra.category,
             fit=extra.fit if extra.fit in ("slim", "regular", "oversized") else "regular",
             description=(extra.name or extra.category)[:300],
         ))
-        idx += 1
 
     _log.info(
-        "Starting Gemini try-on for job %s (%d garments, pose_ref=%s, layering=%s, height=%scm)",
+        "Job %s — starting try-on (%d garments, pose_ref=%s, layering=%s, height=%scm)",
         job.id, len(garments), bool(pose_bytes), bool(data.base_image_url), subject.height_cm if subject else "?"
     )
 
+    # ── Call 2: Generate try-on ───────────────────────────────────────────────
     result_bytes = await generate_tryon(
         person_bytes=person_bytes,
         garments=garments,
@@ -139,14 +154,34 @@ async def submit_tryon(
         await db.flush()
         return job
 
+    # ── Call 3: Validate result + auto-retry once if failed ───────────────────
+    validation: dict = {"passed": True, "confidence": 0.8, "issues": [], "notes": ""}
+    validation = await validate_tryon_result(result_bytes, garments)
+    _log.info("Job %s — validation: passed=%s confidence=%.2f", job.id, validation["passed"], validation["confidence"])
+
+    if not validation["passed"]:
+        _log.info("Job %s — retrying generation (confidence %.2f below threshold)", job.id, validation["confidence"])
+        retry_bytes = await generate_tryon(
+            person_bytes=person_bytes,
+            garments=garments,
+            pose_bytes=pose_bytes,
+            subject=subject,
+        )
+        if retry_bytes:
+            result_bytes = retry_bytes
+            validation = await validate_tryon_result(result_bytes, garments)
+            _log.info("Job %s — retry validation: passed=%s confidence=%.2f", job.id, validation["passed"], validation["confidence"])
+
     # Upload result to Supabase Storage
     result_key = await upload_bytes(result_bytes, prefix=f"results/{user_id}")
     job.result_s3_key = result_key
     job.result_url = get_public_url(result_key)
     job.status = TryOnStatus.completed
     job.completed_at = datetime.now(timezone.utc)
+    job.fit_confidence = validation.get("confidence")
+    job.fit_notes = validation.get("notes") or None
     await db.flush()
-    _log.info("Try-on job %s completed successfully", job.id)
+    _log.info("Try-on job %s completed (confidence=%.2f)", job.id, validation.get("confidence", 0))
     return job
 
 

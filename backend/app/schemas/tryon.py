@@ -32,6 +32,8 @@ class TryOnJobResponse(BaseModel):
     share_slug: str | None
     created_at: datetime
     completed_at: datetime | None
+    fit_confidence: float | None = None
+    fit_notes: str | None = None
 
     model_config = {"from_attributes": True}
 

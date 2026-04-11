@@ -143,6 +143,35 @@ async function downloadResult() {
               </div>
             </div>
 
+            <!-- Fit Confidence -->
+            <div v-if="job.fit_confidence != null" class="card p-4">
+              <div class="flex items-center justify-between mb-2">
+                <p class="text-xs font-medium">Fit Confidence</p>
+                <p
+                  class="text-xs font-semibold"
+                  :class="
+                    job.fit_confidence >= 0.85 ? 'text-green-500' :
+                    job.fit_confidence >= 0.70 ? 'text-drape-gold' :
+                    'text-[var(--color-text-muted)]'
+                  "
+                >{{ Math.round(job.fit_confidence * 100) }}%</p>
+              </div>
+              <div class="w-full h-1.5 rounded-full bg-[var(--color-border)]">
+                <div
+                  class="h-1.5 rounded-full transition-all"
+                  :class="
+                    job.fit_confidence >= 0.85 ? 'bg-green-500' :
+                    job.fit_confidence >= 0.70 ? 'bg-drape-gold' :
+                    'bg-[var(--color-text-muted)]'
+                  "
+                  :style="{ width: `${Math.round(job.fit_confidence * 100)}%` }"
+                />
+              </div>
+              <p v-if="job.fit_notes" class="text-xs text-[var(--color-text-muted)] mt-2 italic">
+                "{{ job.fit_notes }}"
+              </p>
+            </div>
+
             <!-- Buy button -->
             <a
               v-if="job.product?.affiliate_url || job.product?.source_url"
