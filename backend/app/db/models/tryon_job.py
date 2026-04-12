@@ -34,6 +34,9 @@ class TryOnJob(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     fit_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fit_confidence_pct: Mapped[int | None] = mapped_column(nullable=True)
+    suggested_size: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    fit_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     fit_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     is_saved: Mapped[bool] = mapped_column(Boolean, default=False)

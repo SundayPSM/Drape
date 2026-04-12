@@ -143,31 +143,48 @@ async function downloadResult() {
               </div>
             </div>
 
-            <!-- Fit Confidence -->
-            <div v-if="job.fit_confidence != null" class="card p-4">
-              <div class="flex items-center justify-between mb-2">
-                <p class="text-xs font-medium">Fit Confidence</p>
-                <p
-                  class="text-xs font-semibold"
-                  :class="
-                    job.fit_confidence >= 0.85 ? 'text-green-500' :
-                    job.fit_confidence >= 0.70 ? 'text-drape-gold' :
-                    'text-[var(--color-text-muted)]'
-                  "
-                >{{ Math.round(job.fit_confidence * 100) }}%</p>
+            <!-- Trust Layer -->
+            <div v-if="job.fit_confidence_pct != null" class="card p-4 space-y-3">
+              <p class="text-xs font-semibold tracking-wide uppercase text-[var(--color-text-muted)]">Fit Analysis</p>
+
+              <!-- Fit Confidence bar -->
+              <div>
+                <div class="flex items-center justify-between mb-1.5">
+                  <p class="text-xs">Fit Confidence</p>
+                  <p
+                    class="text-xs font-semibold"
+                    :class="
+                      job.fit_confidence_pct >= 85 ? 'text-green-500' :
+                      job.fit_confidence_pct >= 70 ? 'text-drape-gold' :
+                      'text-red-400'
+                    "
+                  >{{ job.fit_confidence_pct }}%</p>
+                </div>
+                <div class="w-full h-1.5 rounded-full bg-[var(--color-border)]">
+                  <div
+                    class="h-1.5 rounded-full transition-all duration-700"
+                    :class="
+                      job.fit_confidence_pct >= 85 ? 'bg-green-500' :
+                      job.fit_confidence_pct >= 70 ? 'bg-drape-gold' :
+                      'bg-red-400'
+                    "
+                    :style="{ width: `${job.fit_confidence_pct}%` }"
+                  />
+                </div>
               </div>
-              <div class="w-full h-1.5 rounded-full bg-[var(--color-border)]">
-                <div
-                  class="h-1.5 rounded-full transition-all"
-                  :class="
-                    job.fit_confidence >= 0.85 ? 'bg-green-500' :
-                    job.fit_confidence >= 0.70 ? 'bg-drape-gold' :
-                    'bg-[var(--color-text-muted)]'
-                  "
-                  :style="{ width: `${Math.round(job.fit_confidence * 100)}%` }"
-                />
+
+              <!-- Suggested size + fit type pills -->
+              <div class="flex gap-2 flex-wrap">
+                <div v-if="job.suggested_size" class="flex items-center gap-1.5 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-full px-3 py-1">
+                  <span class="text-[10px] text-[var(--color-text-muted)] uppercase tracking-wide">Suggested</span>
+                  <span class="text-sm font-bold text-drape-gold">{{ job.suggested_size }}</span>
+                </div>
+                <div v-if="job.fit_type" class="flex items-center gap-1.5 bg-[var(--color-surface)] border border-[var(--color-border)] rounded-full px-3 py-1">
+                  <span class="text-xs text-[var(--color-text-muted)]">{{ job.fit_type }}</span>
+                </div>
               </div>
-              <p v-if="job.fit_notes" class="text-xs text-[var(--color-text-muted)] mt-2 italic">
+
+              <p v-if="job.fit_notes" class="text-xs text-[var(--color-text-muted)] italic border-t border-[var(--color-border)] pt-2">
                 "{{ job.fit_notes }}"
               </p>
             </div>

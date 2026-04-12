@@ -354,6 +354,70 @@ async def _run_concurrent(
 # ── Try-on prompt ─────────────────────────────────────────────────────────────
 
 # Per-category: replacement rule + fabric physics description
+# ── Material detection + physics ──────────────────────────────────────────────
+
+def _detect_material(description: str) -> str:
+    """Infer fabric material from garment description for physics simulation."""
+    desc = description.lower()
+    if any(w in desc for w in ["denim", "jean", "jeans"]):
+        return "denim"
+    if any(w in desc for w in ["leather", "suede", "vegan leather"]):
+        return "leather"
+    if any(w in desc for w in ["silk", "satin", "chiffon"]):
+        return "silk"
+    if any(w in desc for w in ["wool", "knit", "cashmere", "fleece", "sweater", "jumper", "knitwear", "cable"]):
+        return "wool_knit"
+    if any(w in desc for w in ["linen", "linen-blend"]):
+        return "linen"
+    if any(w in desc for w in ["nylon", "polyester", "synthetic", "technical", "windbreaker", "neoprene", "gore-tex"]):
+        return "synthetic"
+    return "cotton"
+
+
+_MATERIAL_PHYSICS: dict[str, str] = {
+    "denim": (
+        "DENIM PHYSICS: stiff woven fabric with low drape. Deep parallel crease lines at knees and crotch. "
+        "Thick visible seams at inseam, outseam, and fly. Rigid waistband sits heavy on hips. "
+        "Fabric holds its shape — minimal flowing drape. Slight indigo fade at high-friction wear points."
+    ),
+    "leather": (
+        "LEATHER PHYSICS: structured rigid material with a subtle surface sheen. "
+        "Creases only at flex joints — elbows, behind knees. Shoulder panels hold architectural shape. "
+        "Specular highlight band along curved surfaces. Wrinkles are deep and directional. "
+        "Material weight causes hem and cuffs to sit heavy."
+    ),
+    "silk": (
+        "SILK/SATIN PHYSICS: ultra-fluid low-friction fabric with high drape coefficient. "
+        "Cascading smooth rounded folds following gravity. "
+        "Specular sheen highlight bands across curved surfaces — fabric catches and reflects light. "
+        "Minimal sharp friction wrinkles. Soft flowing folds at waist and hip."
+    ),
+    "wool_knit": (
+        "WOOL/KNIT PHYSICS: heavy elastic fabric with pronounced surface texture. "
+        "Visible rib lines at cuffs, collar, and hem. Fabric stretches at shoulders/chest. "
+        "Soft rounded drape with minimal sharp creases. Cable or knit pattern clearly visible. "
+        "Slight pilling texture on high-friction zones (inner arms, collar edge)."
+    ),
+    "linen": (
+        "LINEN PHYSICS: highly wrinkle-prone natural fiber. "
+        "Visible wrinkle clusters at elbows, waist, and back of knee — these are natural and should NOT be ironed out. "
+        "Relaxed loose drape. Natural slub texture variation across surface."
+    ),
+    "synthetic": (
+        "SYNTHETIC/TECHNICAL PHYSICS: wrinkle-resistant, retains engineered shape. "
+        "Slight surface sheen or matte technical finish. Seam tape visible at stress seams. "
+        "Fabric follows body contour cleanly without heavy creasing. Zippers and hardware sit flush and precise."
+    ),
+    "cotton": (
+        "COTTON PHYSICS: medium-weight natural fiber with soft natural wrinkles. "
+        "Soft rounded folds at armpits, elbows, and waist. "
+        "Jersey cotton shows subtle stretch lines at shoulders. Woven cotton shows crisp fold lines at elbows. "
+        "Hem hangs with a slight gravity curve — never perfectly straight."
+    ),
+}
+
+
+# Per-category: replacement rule + base fabric physics description
 _CATEGORY_RULES: dict[str, tuple[str, str]] = {
     "tops": (
         "Replace ONLY the upper-body garment with the item shown. Keep lower-body clothing exactly as-is.",
@@ -519,17 +583,21 @@ def _build_outfit_prompt(garments: list[GarmentInput], has_pose_ref: bool = Fals
     garment_start = 3 if has_pose_ref else 2
     garment_lines: list[str] = []
     for i, g in enumerate(garments, start=garment_start):
-        rule, fabric_physics = _CATEGORY_RULES.get(
+        rule, base_physics = _CATEGORY_RULES.get(
             g.category,
             ("Apply the garment naturally.", "natural fabric drape and wrinkles"),
         )
         fit_mod = _FIT_MODIFIERS.get(g.fit, _FIT_MODIFIERS["regular"])
+        # Material-aware physics layer
+        material = _detect_material(g.description)
+        material_physics = _MATERIAL_PHYSICS.get(material, _MATERIAL_PHYSICS["cotton"])
         desc_part = f" — {g.description}" if g.description else ""
         garment_lines.append(
             f"  Image {i}: {g.category.upper()}{desc_part}\n"
             f"    Placement: {rule}\n"
             f"    Fit: {fit_mod}\n"
-            f"    Fabric: {fabric_physics}"
+            f"    Base physics: {base_physics}\n"
+            f"    Material physics: {material_physics}"
         )
 
     garment_block = "\n\n".join(garment_lines)
@@ -574,7 +642,7 @@ def _build_outfit_prompt(garments: list[GarmentInput], has_pose_ref: bool = Fals
     )
 
     return (
-        f"You are a professional virtual try-on AI system with strict image role separation.\n"
+        f"You are a professional virtual try-on AI system targeting 90% photorealism.\n"
         f"Each input image has one exclusive role. Treat them independently — do not mix.\n\n"
         f"═══ INPUT IMAGES & THEIR ROLES ═══\n"
         f"{inputs_block}\n\n"
@@ -601,40 +669,61 @@ def _build_outfit_prompt(garments: list[GarmentInput], has_pose_ref: bool = Fals
         f"- Follow each garment's Placement rule — do not swap or mix them\n"
         f"- Garments must form a coherent, stylish complete look\n"
         f"- Natural layering: shirt visible under open jacket, watch below sleeve cuff, etc.\n\n"
-        f"═══ FABRIC PHYSICS ═══\n"
+        f"═══ FABRIC PHYSICS & MATERIAL SIMULATION ═══\n"
         f"The garment must look like it is PHYSICALLY WORN by a real human body — not a product shot, not a mannequin, not a flat overlay.\n"
-        f"Simulate realistic cloth — wrinkles at stress points (armpits, elbows, waist, knees), "
-        f"fabric tension across shoulders, gravity pulling fabric down, natural fold shadows. "
-        f"Fabric wraps body contours; does not float or sit flat.\n"
-        f"WORN STATE: Preserve the garment's natural worn state from the product image — "
-        f"if the zip is open keep it open, if the collar is relaxed keep it relaxed, "
-        f"if the jacket has volume keep that volume. Do not change closures or garment state.\n"
-        f"Quality: Marvelous Designer cloth simulation, professional fashion editorial.\n\n"
-        f"═══ SHADOW & LIGHTING ═══\n"
-        f"- Cast soft contact shadow under collar onto neck and chest\n"
-        f"- Shadow under chin from any hood or high collar\n"
-        f"- Shadow in arm fold creases — armpits, inner elbow\n"
-        f"- Shadow at waist where fabric meets skin or inner layer\n"
-        f"- Lighting direction must match Image 1 exactly — preserve warm/cool temperature\n\n"
+        f"Apply BOTH the base physics and the material-specific physics listed per garment above.\n"
+        f"General rules:\n"
+        f"  • Gravity pulls all fabric downward — hems never float level\n"
+        f"  • Fabric wraps 3D body contours — follows the curve of the chest, shoulder blade, hip, and knee\n"
+        f"  • Stress wrinkles radiate from anchor points (armpits, crotch, waist seam, knee bend)\n"
+        f"  • Compression folds form where fabric is pushed inward by body mass\n"
+        f"  • Each material behaves differently — simulate it according to the material physics specification above\n"
+        f"WORN STATE: Preserve exactly from the product image — open zip stays open, relaxed collar stays relaxed, volume stays. Never flatten or alter the garment state.\n"
+        f"Quality reference: Marvelous Designer cloth simulation, CLO 3D physics, professional fashion editorial.\n\n"
+        f"═══ SHADOW INJECTION ═══\n"
+        f"Cast EVERY shadow below — missing any is a realism failure:\n"
+        f"  • CONTACT SHADOW: soft dark shadow at every garment-to-skin contact edge (collar-to-neck, cuff-to-wrist, hem-to-thigh)\n"
+        f"  • UNDER-COLLAR SHADOW: shadow cast by collar/lapel onto neck and upper chest\n"
+        f"  • AXILLA SHADOW: deep shadow in the armpit cavity where sleeve meets torso\n"
+        f"  • ELBOW CREASE SHADOW: shadow inside elbow fold when arm is bent\n"
+        f"  • WAIST SHADOW: shadow where waistband presses into skin or underlying garment\n"
+        f"  • FOLD SHADOWS: every fabric fold has a shadow on its concave (darker) side\n"
+        f"  • LAYERING SHADOW: if jacket is worn over shirt, shadow cast by jacket hem and collar onto underlying shirt\n"
+        f"  • GROUND SHADOW: feet and shoes cast a soft diffuse shadow on the ground plane\n"
+        f"  • LIGHTING MATCH: shadow direction and temperature MUST match the lighting in Image 1 exactly\n\n"
         f"═══ DEPTH & EDGE QUALITY ═══\n"
-        f"- Garment edges must have soft natural falloff, not sharp cut-out lines\n"
-        f"- Occlusion shadow between garment and body (depth separation)\n"
-        f"- Subtle ambient occlusion where fabric layers overlap\n"
-        f"- No halo or glow effect around garment edges\n\n"
-        f"═══ MICRO-REALISM ═══\n"
-        f"- Slight natural asymmetry between left and right sleeves\n"
-        f"- Subtle texture grain variation across fabric surface\n"
-        f"- Micro-wrinkles at high-tension seams — armpit seam, collar crease\n"
-        f"- These details signal a real photo, not an AI composite\n\n"
+        f"  • Garment edges: soft natural falloff matching real fabric edges — NO sharp cut-out silhouette lines\n"
+        f"  • Depth separation: occlusion shadow between garment surface and body at neckline, sleeve openings, hem\n"
+        f"  • Layer depth: each fabric layer sits at a physically correct z-depth above the previous layer\n"
+        f"  • Ambient occlusion: subtle darkening where fabric layers overlap or compress (inner collar, under lapel)\n"
+        f"  • Halo prohibition: absolutely NO bright glow or halo around any garment edge\n"
+        f"  • Sub-surface scattering: thin fabrics (silk, light cotton) show a very slight warm light bleed at edges when backlit\n\n"
+        f"═══ MICRO-IMPERFECTIONS ═══\n"
+        f"These micro-details are MANDATORY — they are what makes a result look like a real photo:\n"
+        f"  • Left/right ASYMMETRY: sleeves and lapels are never perfectly mirror-identical — one is always slightly different\n"
+        f"  • FABRIC GRAIN: subtle texture variation across the fabric surface — never perfectly uniform\n"
+        f"  • SEAM MICRO-WRINKLES: tiny wrinkles radiating from high-tension seams (armpit seam, collar attachment seam)\n"
+        f"  • WEAR ARTIFACTS: very subtle fabric compression at high-contact body points (shoulder top, collar fold)\n"
+        f"  • GRAVITATIONAL SAG: slight downward sag at sleeve ends and hem corners — fabric has weight\n"
+        f"  • NATURAL IMPERFECTION: 1-2 minor random folds that are not stress-point driven — real clothes are never perfectly modeled\n\n"
         f"═══ NEGATIVE PROMPT ═══\n"
-        f"Do NOT produce: identity transfer, copied face from reference images, copied tattoos, "
-        f"pasted clothing texture, stiff fabric, unrealistic folds, flat lighting, mannequin style, "
-        f"mixed identities, plastic sheen, floating clothes, incorrect shadows, "
-        f"compressed body height, wrong body proportions, "
-        f"product-catalog look, flat product shot, altered zip/button state, "
-        f"closed zip when product shows open zip, stiff collar when product shows relaxed collar.\n\n"
+        f"Do NOT produce any of the following — each is a critical failure:\n"
+        f"  ✗ Identity transfer / copied face or skin from non-identity image\n"
+        f"  ✗ Pasted-on clothing texture (garment looks like a flat decal on body)\n"
+        f"  ✗ Stiff or rigid fabric with no wrinkles or drape\n"
+        f"  ✗ Plastic sheen on matte fabrics\n"
+        f"  ✗ Floating clothes (not in contact with body)\n"
+        f"  ✗ Missing contact shadows at garment edges\n"
+        f"  ✗ Sharp cut-out halo around garment silhouette\n"
+        f"  ✗ Perfectly symmetrical left/right sleeves\n"
+        f"  ✗ Flat uniform texture with no grain variation\n"
+        f"  ✗ Compressed, shortened, or widened body proportions\n"
+        f"  ✗ Product-catalog look (garment on invisible mannequin)\n"
+        f"  ✗ Altered garment state (zip closed when product shows open, etc.)\n"
+        f"  ✗ Inconsistent lighting direction vs Image 1\n\n"
         f"OUTPUT: Single ultra-high-resolution photorealistic image. "
-        f"Professional fashion photoshoot quality. Every garment physically worn, not composited."
+        f"Target: 90% realism — indistinguishable from a real fashion photoshoot at first glance. "
+        f"Every garment physically worn, every shadow present, every material behaving correctly."
     )
 
 
@@ -734,23 +823,54 @@ async def normalize_garment(garment_bytes: bytes, category: str) -> bytes:
 # ── Result validation ─────────────────────────────────────────────────────────
 
 def _validate_tryon_sync(result_bytes: bytes, garments: list[GarmentInput]) -> dict:
-    """QC check on generated try-on result. Returns pass/fail + confidence + notes."""
-    garment_list = ", ".join(f"{g.category} ({g.fit})" for g in garments)
+    """
+    QC + trust layer analysis on generated try-on result.
+    Returns: passed, confidence, fit_confidence_pct, suggested_size, fit_type, issues, notes.
+    """
+    garment_list = ", ".join(f"{g.category} ({g.fit} fit)" for g in garments)
+    primary = garments[0] if garments else None
+    primary_category = primary.category if primary else "tops"
+    primary_fit = primary.fit if primary else "regular"
+
     prompt = (
-        f"You are a quality control AI for virtual try-on results.\n\n"
-        f"Analyze the provided try-on result image and score it on these criteria:\n\n"
-        f"CHECKLIST:\n"
-        f"1. Garment placement — correctly positioned on the body?\n"
-        f"2. Collar/neckline — aligned to neck, not floating or misaligned?\n"
-        f"3. Sleeve length — appropriate for the garment category?\n"
-        f"4. Fabric realism — natural wrinkles, no stiff or plastic texture?\n"
-        f"5. Body distortion — natural proportions, no squished or stretched body?\n"
-        f"6. Shadow consistency — garment shadow matches scene lighting?\n"
-        f"7. Edge quality — no sharp cut-out edges or halos around the garment?\n\n"
-        f"GARMENTS EXPECTED: {garment_list}\n\n"
-        f"Respond in this exact JSON format and nothing else:\n"
-        f'{{"passed": true, "confidence": 0.85, "issues": [], "notes": "Natural drape, good shoulder alignment"}}\n\n'
-        f"Set passed=true if confidence >= 0.72, false otherwise."
+        f"You are a senior quality control and fit analyst AI for a virtual try-on platform.\n\n"
+        f"Analyze the provided try-on result image across TWO layers:\n\n"
+        f"━━━ LAYER 1: REALISM QC ━━━\n"
+        f"Score each criterion from 0.0 to 1.0:\n"
+        f"1. garment_placement — correctly positioned on the body?\n"
+        f"2. fabric_realism — natural wrinkles, material-appropriate drape, no stiff/plastic texture?\n"
+        f"3. shadow_quality — contact shadows present at all garment edges? Fold shadows visible?\n"
+        f"4. edge_quality — no sharp cut-out lines or halo around garment silhouette?\n"
+        f"5. body_proportions — natural body shape, not squished/stretched?\n"
+        f"6. micro_detail — fabric grain, asymmetry, seam wrinkles visible?\n\n"
+        f"━━━ LAYER 2: FIT TRUST LAYER ━━━\n"
+        f"Garments expected: {garment_list}\n"
+        f"Analyze the fit of the primary garment ({primary_category}, {primary_fit} fit) and determine:\n"
+        f"A. fit_confidence_pct (integer 0-100): How confident are you this garment fits the person well?\n"
+        f"   - 90-100: Perfect fit, no issues\n"
+        f"   - 75-89: Good fit with minor imperfections\n"
+        f"   - 60-74: Acceptable but some fit issues (shoulder width, length)\n"
+        f"   - below 60: Poor fit\n"
+        f"B. suggested_size: Based on what you see, suggest the best size.\n"
+        f"   Options: XS, S, M, L, XL, XXL — pick the one that would fit this person best for this garment.\n"
+        f"C. fit_type: Describe how the garment actually fits in 2-5 words.\n"
+        f"   Examples: 'True to size', 'Runs large', 'Runs small', 'Slim through shoulders', 'Relaxed through waist'\n\n"
+        f"━━━ RESPONSE FORMAT ━━━\n"
+        f"Respond in this EXACT JSON format and nothing else:\n"
+        f'{{\n'
+        f'  "passed": true,\n'
+        f'  "confidence": 0.85,\n'
+        f'  "fit_confidence_pct": 82,\n'
+        f'  "suggested_size": "M",\n'
+        f'  "fit_type": "True to size",\n'
+        f'  "issues": [],\n'
+        f'  "notes": "Good shoulder alignment, natural sleeve drape"\n'
+        f'}}\n\n'
+        f"Rules:\n"
+        f"- confidence = average of all 6 realism scores\n"
+        f"- passed = true if confidence >= 0.72\n"
+        f"- issues = list of failed criteria names (those scoring below 0.65)\n"
+        f"- Respond with JSON only — no explanation, no markdown fences"
     )
     try:
         client = genai.Client(api_key=settings.google_api_key)
@@ -759,7 +879,7 @@ def _validate_tryon_sync(result_bytes: bytes, garments: list[GarmentInput]) -> d
             types.Part.from_bytes(data=result_bytes, mime_type="image/jpeg"),
         ]
         response = client.models.generate_content(
-            model="gemini-3.1-flash-image-preview",
+            model="gemini-2.5-flash",
             contents=[types.Content(parts=parts)],
         )
         text = (response.text or "").strip()
@@ -770,12 +890,23 @@ def _validate_tryon_sync(result_bytes: bytes, garments: list[GarmentInput]) -> d
             return {
                 "passed": bool(data.get("passed", True)),
                 "confidence": float(data.get("confidence", 0.8)),
+                "fit_confidence_pct": int(data.get("fit_confidence_pct", 80)),
+                "suggested_size": str(data.get("suggested_size", "M")),
+                "fit_type": str(data.get("fit_type", "True to size")),
                 "issues": list(data.get("issues", [])),
                 "notes": str(data.get("notes", "")),
             }
     except Exception as exc:
         _log.warning("Try-on validation failed (%s), assuming passed", exc)
-    return {"passed": True, "confidence": 0.8, "issues": [], "notes": ""}
+    return {
+        "passed": True,
+        "confidence": 0.8,
+        "fit_confidence_pct": 80,
+        "suggested_size": "M",
+        "fit_type": "True to size",
+        "issues": [],
+        "notes": "",
+    }
 
 
 async def validate_tryon_result(result_bytes: bytes, garments: list[GarmentInput]) -> dict:

@@ -33,6 +33,9 @@ class TryOnJobResponse(BaseModel):
     created_at: datetime
     completed_at: datetime | None
     fit_confidence: float | None = None
+    fit_confidence_pct: int | None = None
+    suggested_size: str | None = None
+    fit_type: str | None = None
     fit_notes: str | None = None
 
     model_config = {"from_attributes": True}
@@ -43,3 +46,7 @@ class TryOnStatusResponse(BaseModel):
     status: TryOnStatus
     result_url: str | None = None
     error_message: str | None = None
+    fit_confidence_pct: int | None = None
+    suggested_size: str | None = None
+    fit_type: str | None = None
+    fit_notes: str | None = None

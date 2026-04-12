@@ -179,9 +179,18 @@ async def submit_tryon(
     job.status = TryOnStatus.completed
     job.completed_at = datetime.now(timezone.utc)
     job.fit_confidence = validation.get("confidence")
+    job.fit_confidence_pct = validation.get("fit_confidence_pct")
+    job.suggested_size = validation.get("suggested_size") or None
+    job.fit_type = validation.get("fit_type") or None
     job.fit_notes = validation.get("notes") or None
     await db.flush()
-    _log.info("Try-on job %s completed (confidence=%.2f)", job.id, validation.get("confidence", 0))
+    _log.info(
+        "Try-on job %s completed (confidence=%.2f, fit=%d%%, size=%s, fit_type=%s)",
+        job.id, validation.get("confidence", 0),
+        validation.get("fit_confidence_pct", 0),
+        validation.get("suggested_size", "?"),
+        validation.get("fit_type", "?"),
+    )
     return job
 
 
@@ -196,6 +205,10 @@ async def get_job_status(job_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession
         status=job.status,
         result_url=job.result_url,
         error_message=job.error_message,
+        fit_confidence_pct=job.fit_confidence_pct,
+        suggested_size=job.suggested_size,
+        fit_type=job.fit_type,
+        fit_notes=job.fit_notes,
     )
 
 

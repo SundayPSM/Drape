@@ -23,6 +23,10 @@ async def submit_tryon(
         status=job.status,
         result_url=job.result_url,
         error_message=job.error_message,
+        fit_confidence_pct=job.fit_confidence_pct,
+        suggested_size=job.suggested_size,
+        fit_type=job.fit_type,
+        fit_notes=job.fit_notes,
     )
 
 

@@ -83,6 +83,9 @@ export interface TryOnJob {
   created_at: string
   completed_at: string | null
   fit_confidence: number | null
+  fit_confidence_pct: number | null
+  suggested_size: string | null
+  fit_type: string | null
   fit_notes: string | null
 }
 
@@ -91,6 +94,10 @@ export interface TryOnStatusResponse {
   status: TryOnStatus
   result_url: string | null
   error_message: string | null
+  fit_confidence_pct: number | null
+  suggested_size: string | null
+  fit_type: string | null
+  fit_notes: string | null
 }
 
 export interface ApiError {
