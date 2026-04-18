@@ -3,13 +3,21 @@ import { ref, computed } from 'vue'
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 const MAX_SIZE_MB = 20
 
+/**
+ * Photo slot types — ORDER IS MANDATORY.
+ * Backend pipeline expects images in this exact sequence:
+ *   [0] face_closeup   → Primary identity anchor (face close-up FIRST)
+ *   [1] body_front     → Full body proportions anchor
+ *   [2] left_30        → Left 30° three-quarter
+ *   [3] right_30       → Right 30° three-quarter
+ *   [4] walking        → Walking / casual pose
+ */
 export type GuidedPhotoType =
-  | 'face_front'
-  | 'profile_left'
-  | 'profile_right'
+  | 'face_closeup'
   | 'body_front'
-  | 'body_side'
-  | 'three_quarter'
+  | 'left_30'
+  | 'right_30'
+  | 'walking'
 
 export interface UploadFile {
   id: string
@@ -25,45 +33,72 @@ export interface GuidedSlot {
   label: string
   description: string
   hint: string
+  tips: string[]
   file: UploadFile | null
 }
 
 export const GUIDED_SLOT_DEFINITIONS: Omit<GuidedSlot, 'file'>[] = [
   {
-    type: 'face_front',
-    label: 'Face — Front',
-    description: 'Close-up face, looking directly at the camera',
-    hint: 'Eyes forward · neutral expression · good lighting',
-  },
-  {
-    type: 'profile_left',
-    label: 'Left Profile',
-    description: 'Turn 90° to your left — full side of face visible',
-    hint: 'Ear fully visible · chin level · no tilt',
-  },
-  {
-    type: 'profile_right',
-    label: 'Right Profile',
-    description: 'Turn 90° to your right — full side of face visible',
-    hint: 'Ear fully visible · chin level · no tilt',
+    type: 'face_closeup',
+    label: 'Close-up Face',
+    description: 'Face only, eyes forward, neutral expression',
+    hint: 'This is the most important photo — your face identity',
+    tips: [
+      'Fill the frame with your face',
+      'Look directly at the camera',
+      'Neutral or slight smile — no sunglasses',
+      'Even lighting, no harsh shadows',
+      'No filters or heavy makeup',
+    ],
   },
   {
     type: 'body_front',
     label: 'Full Body — Front',
     description: 'Stand straight, face the camera — head to toe',
-    hint: 'Arms slightly away from body · feet together',
+    hint: 'Used to capture your exact height and body proportions',
+    tips: [
+      'Head to toe — full body in frame',
+      'Stand straight, arms slightly away from body',
+      'Feet shoulder-width apart',
+      'Plain background if possible',
+      'Fitted clothing works best',
+    ],
   },
   {
-    type: 'body_side',
-    label: 'Full Body — Side',
-    description: 'Turn sideways — full body visible from head to toe',
-    hint: 'Arms relaxed · stand straight · full body in frame',
+    type: 'left_30',
+    label: 'Left 30° Turn',
+    description: 'Turn your body 30° to the left, face the camera',
+    hint: 'Slight left turn — not full profile, just 30 degrees',
+    tips: [
+      'Turn your body 30° to the LEFT',
+      'Head can look toward camera',
+      'Full body visible head to toe',
+      'Natural relaxed stance',
+    ],
   },
   {
-    type: 'three_quarter',
-    label: '¾ Angle',
-    description: 'Turn 45° toward the camera — natural angle',
-    hint: 'Most natural pose · slight shoulder turn',
+    type: 'right_30',
+    label: 'Right 30° Turn',
+    description: 'Turn your body 30° to the right, face the camera',
+    hint: 'Mirror of the left turn — 30 degrees to the right',
+    tips: [
+      'Turn your body 30° to the RIGHT',
+      'Head can look toward camera',
+      'Full body visible head to toe',
+      'Natural relaxed stance',
+    ],
+  },
+  {
+    type: 'walking',
+    label: 'Walking / Casual',
+    description: 'Natural walking pose or casual relaxed stance',
+    hint: 'Captures your natural movement and posture',
+    tips: [
+      'Mid-stride walking pose OR casual relaxed stance',
+      'Natural arm position — not forced',
+      'Full body visible head to toe',
+      'Any natural expression',
+    ],
   },
 ]
 

@@ -185,17 +185,20 @@ function handleSlotInput(event: Event, type: GuidedPhotoType) {
 }
 
 const ANGLE_LABELS = [
-  'Rear view', '¾ Left', '¾ Right', 'Low angle', 'High angle',
-  'Seated', 'Walking', 'Arms crossed', 'Upper body', 'Casual pose',
+  'Front', '¾ Left', '¾ Right', 'Left Profile', 'Right Profile',
+  'Rear', 'Walking', 'Seated', 'Confident',
 ]
+
+// Which slot is showing tips popover
+const activeTipsSlot = ref<string | null>(null)
 
 function startGeneratingMessages() {
   const messages = [
-    { delay: 0,     text: 'Uploading your photos...' },
-    { delay: 5000,  text: 'Analyzing your body type...' },
-    { delay: 15000, text: 'Generating 10 angle variations with Gemini...' },
-    { delay: 45000, text: 'Creating your AI try-on portraits...' },
-    { delay: 75000, text: 'Almost done...' },
+    { delay: 0,     text: 'Upscaling your photos for maximum detail...' },
+    { delay: 6000,  text: 'Analyzing your body type...' },
+    { delay: 18000, text: 'Generating 8 camera angle views with Gemini...' },
+    { delay: 55000, text: 'Creating your AI try-on portraits...' },
+    { delay: 85000, text: 'Almost done...' },
   ]
   messages.forEach(({ delay, text }) => {
     setTimeout(() => {
@@ -210,7 +213,7 @@ async function uploadAndGenerate() {
   startGeneratingMessages()
 
   try {
-    // Upload all 6 photos
+    // Upload all 5 photos IN ORDER — backend pipeline depends on this order
     const ids: string[] = []
     for (const slot of slots.value) {
       if (!slot.file) throw new Error(`Missing photo: ${slot.label}`)
@@ -259,14 +262,6 @@ const STEP_LABELS: Record<Step, string> = {
   profile: 'Profile', upload: 'Photos', generating: 'AI', angles: 'Angles', pick: 'Pick', done: 'Done',
 }
 
-const SILHOUETTES: Record<GuidedPhotoType, string> = {
-  face_front:    'M12 4a4 4 0 100 8 4 4 0 000-8zM6 20a6 6 0 1112 0',
-  profile_left:  'M14 4a4 4 0 10-4 7.87V20M10 12H6',
-  profile_right: 'M10 4a4 4 0 114 7.87V20M14 12h4',
-  body_front:    'M12 3a3 3 0 100 6 3 3 0 000-6zM5 21v-2a7 7 0 0114 0v2M12 12v9M9 15l3-3 3 3',
-  body_side:     'M12 3a3 3 0 100 6M12 9v12M8 14l4-2M12 21l3-4',
-  three_quarter: 'M11 4a4 4 0 108 2.46V20M11 12H7M15 12h2',
-}
 </script>
 
 <template>
@@ -428,13 +423,25 @@ const SILHOUETTES: Record<GuidedPhotoType, string> = {
 
         <!-- ── Step 2: Upload ──────────────────────────────────────── -->
         <div v-else-if="step === 'upload'" key="upload" class="animate-fadeUp">
-          <h1 class="font-display text-3xl font-semibold mb-2">Upload your photos</h1>
-          <p class="text-[var(--color-text-muted)] mb-8">
-            Take 6 clear photos — our AI needs each angle to build an accurate model of you.
+          <h1 class="font-display text-3xl font-semibold mb-2">Upload your 5 photos</h1>
+          <p class="text-[var(--color-text-muted)] mb-2">
+            Our AI needs these exact 5 angles — in order — to build an accurate digital model of you.
           </p>
 
-          <div class="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-8">
-            <div v-for="slot in slots" :key="slot.type" class="flex flex-col gap-2">
+          <!-- Order explanation banner -->
+          <div class="flex items-start gap-3 p-3 rounded-xl bg-drape-gold/10 border border-drape-gold/30 mb-8">
+            <svg class="w-4 h-4 text-drape-gold mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <p class="text-xs text-drape-gold leading-relaxed">
+              <strong>Photo 1 (face close-up) is the most important.</strong>
+              It anchors your identity — the AI reads your exact face features from it.
+              Upload all 5 in the order shown below.
+            </p>
+          </div>
+
+          <div class="space-y-3 mb-8">
+            <div v-for="(slot, index) in slots" :key="slot.type">
               <!-- Hidden file input -->
               <input
                 :ref="el => slotInputRefs[slot.type] = el as HTMLInputElement"
@@ -444,56 +451,103 @@ const SILHOUETTES: Record<GuidedPhotoType, string> = {
                 @change="(e) => handleSlotInput(e, slot.type)"
               />
 
-              <!-- Upload card -->
+              <!-- Slot row -->
               <div
-                class="relative aspect-[3/4] rounded-2xl border-2 overflow-hidden cursor-pointer transition-all duration-200 group"
+                class="flex gap-4 items-center p-3 rounded-2xl border-2 transition-all duration-200 cursor-pointer group"
                 :class="slot.file?.error
-                  ? 'border-red-400'
+                  ? 'border-red-400 bg-red-400/5'
                   : slot.file
-                    ? 'border-drape-gold'
-                    : 'border-dashed border-[var(--color-border)] hover:border-drape-gold/50'"
+                    ? 'border-drape-gold bg-drape-gold/5'
+                    : 'border-dashed border-[var(--color-border)] hover:border-drape-gold/50 hover:bg-[var(--color-surface)]'"
                 @click="triggerSlotInput(slot.type)"
               >
-                <!-- Preview -->
-                <img v-if="slot.file && !slot.file.error"
-                  :src="slot.file.preview"
-                  :alt="slot.label"
-                  class="w-full h-full object-cover"
-                />
-
-                <!-- Empty state -->
-                <div v-else class="w-full h-full flex flex-col items-center justify-center gap-2 p-3">
-                  <svg class="w-8 h-8 text-[var(--color-text-muted)] opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path :d="SILHOUETTES[slot.type]" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                  </svg>
-                  <p class="text-[10px] text-center text-[var(--color-text-muted)] leading-snug">{{ slot.hint }}</p>
+                <!-- Order number -->
+                <div
+                  class="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 transition-all"
+                  :class="slot.file && !slot.file.error
+                    ? 'bg-drape-gold text-drape-obsidian'
+                    : 'bg-[var(--color-border)] text-[var(--color-text-muted)]'"
+                >
+                  {{ slot.file && !slot.file.error ? '✓' : index + 1 }}
                 </div>
 
-                <!-- Remove button -->
-                <button v-if="slot.file"
-                  class="absolute top-2 right-2 w-6 h-6 rounded-full bg-drape-obsidian/70 text-white text-xs
-                         flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                  @click.stop="clearSlot(slot.type)"
-                >✕</button>
+                <!-- Preview thumbnail OR silhouette -->
+                <div class="w-14 h-[4.5rem] rounded-xl overflow-hidden flex-shrink-0 bg-[var(--color-border)]">
+                  <img
+                    v-if="slot.file && !slot.file.error"
+                    :src="slot.file.preview"
+                    :alt="slot.label"
+                    class="w-full h-full object-cover"
+                  />
+                  <div v-else class="w-full h-full flex items-center justify-center">
+                    <svg class="w-6 h-6 text-[var(--color-text-muted)] opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                      <path d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                </div>
 
-                <!-- Check badge -->
-                <div v-if="slot.file && !slot.file.error"
-                  class="absolute bottom-2 right-2 w-6 h-6 rounded-full bg-drape-gold text-drape-obsidian
-                         flex items-center justify-center text-xs font-bold"
-                >✓</div>
+                <!-- Label + description -->
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <p class="text-sm font-semibold">{{ slot.label }}</p>
+                    <span v-if="index === 0" class="text-[10px] bg-drape-gold text-drape-obsidian px-2 py-0.5 rounded-full font-bold">KEY</span>
+                  </div>
+                  <p class="text-xs text-[var(--color-text-muted)] mt-0.5">{{ slot.description }}</p>
+                  <p v-if="slot.file?.error" class="text-xs text-red-500 mt-0.5">{{ slot.file.error }}</p>
+                </div>
+
+                <!-- Right actions -->
+                <div class="flex items-center gap-2 flex-shrink-0" @click.stop>
+                  <!-- Tips button -->
+                  <button
+                    class="text-[10px] text-[var(--color-text-muted)] hover:text-drape-gold border border-[var(--color-border)] hover:border-drape-gold/40 rounded-full px-2 py-1 transition-all"
+                    @click.stop="activeTipsSlot = activeTipsSlot === slot.type ? null : slot.type"
+                  >
+                    Tips
+                  </button>
+                  <!-- Remove -->
+                  <button
+                    v-if="slot.file"
+                    class="w-7 h-7 rounded-full bg-[var(--color-border)] hover:bg-red-400/20 hover:text-red-400 flex items-center justify-center text-xs transition-all"
+                    @click.stop="clearSlot(slot.type)"
+                  >✕</button>
+                  <!-- Upload icon -->
+                  <div v-else class="w-7 h-7 rounded-full border border-[var(--color-border)] flex items-center justify-center opacity-50 group-hover:opacity-100 group-hover:border-drape-gold/50 transition-all">
+                    <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                      <path d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </div>
+                </div>
               </div>
 
-              <div>
-                <p class="text-xs font-medium text-center">{{ slot.label }}</p>
-                <p class="text-[10px] text-center text-[var(--color-text-muted)]">{{ slot.description }}</p>
-                <p v-if="slot.file?.error" class="text-[10px] text-red-500 text-center mt-0.5">{{ slot.file.error }}</p>
+              <!-- Tips panel -->
+              <div
+                v-if="activeTipsSlot === slot.type"
+                class="ml-12 mt-1 p-3 rounded-xl bg-[var(--color-surface)] border border-[var(--color-border)]"
+              >
+                <p class="text-xs font-semibold mb-2 text-drape-gold">Tips for "{{ slot.label }}"</p>
+                <ul class="space-y-1">
+                  <li v-for="tip in slot.tips" :key="tip" class="text-xs text-[var(--color-text-muted)] flex items-start gap-1.5">
+                    <span class="text-drape-gold mt-0.5">•</span>
+                    {{ tip }}
+                  </li>
+                </ul>
               </div>
             </div>
           </div>
 
-          <p class="text-sm text-center text-[var(--color-text-muted)] mb-6">
-            {{ filledCount }}/6 photos ready
-          </p>
+          <!-- Progress -->
+          <div class="flex items-center gap-3 mb-6">
+            <div class="flex-1 h-1.5 rounded-full bg-[var(--color-border)] overflow-hidden">
+              <div
+                class="h-full bg-drape-gold rounded-full transition-all duration-500"
+                :style="{ width: `${(filledCount / 5) * 100}%` }"
+              />
+            </div>
+            <p class="text-sm text-[var(--color-text-muted)] flex-shrink-0">
+              {{ filledCount }}/5 ready
+            </p>
+          </div>
 
           <DrapeButton
             variant="gold"
@@ -502,7 +556,7 @@ const SILHOUETTES: Record<GuidedPhotoType, string> = {
             class="w-full"
             @click="uploadAndGenerate"
           >
-            Generate my identity →
+            Generate my digital model →
           </DrapeButton>
         </div>
 
@@ -513,8 +567,8 @@ const SILHOUETTES: Record<GuidedPhotoType, string> = {
           </div>
           <h2 class="font-display text-2xl font-semibold mb-3">{{ generatingMessage }}</h2>
           <p class="text-[var(--color-text-muted)] text-sm max-w-sm mx-auto">
-            Gemini is analyzing your photos, detecting your body type, and generating 10 AI angle variations.
-            This takes about 60–90 seconds.
+            Gemini is upscaling your photos, detecting your body type, and generating 8 multi-camera-angle views.
+            This takes about 90–120 seconds.
           </p>
           <div class="flex justify-center gap-2 mt-8">
             <span v-for="i in 3" :key="i"
@@ -530,7 +584,7 @@ const SILHOUETTES: Record<GuidedPhotoType, string> = {
             <div>
               <h1 class="font-display text-3xl font-semibold">Your AI angles</h1>
               <p class="text-[var(--color-text-muted)] mt-1">
-                Gemini generated {{ angleImages.length }} views of you. These are used to create your try-on portraits.
+                Gemini generated {{ angleImages.length }} camera angle views of you. These are used to create your try-on portraits.
               </p>
             </div>
             <!-- Detected body type badge -->
@@ -543,7 +597,7 @@ const SILHOUETTES: Record<GuidedPhotoType, string> = {
           </div>
 
           <!-- Angles grid -->
-          <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-6 mb-8">
+          <div class="grid grid-cols-3 sm:grid-cols-5 gap-3 mt-6 mb-8">
             <div
               v-for="(img, i) in angleImages"
               :key="img.key"
@@ -557,15 +611,19 @@ const SILHOUETTES: Record<GuidedPhotoType, string> = {
                   loading="lazy"
                 />
                 <div class="absolute inset-0 bg-drape-obsidian/0 group-hover:bg-drape-obsidian/20 transition-all duration-200" />
+                <!-- Angle number badge -->
+                <div class="absolute top-1.5 left-1.5 w-5 h-5 rounded-full bg-drape-obsidian/60 text-white text-[10px] flex items-center justify-center font-bold">
+                  {{ i + 1 }}
+                </div>
               </div>
               <p class="text-[10px] text-center text-[var(--color-text-muted)] font-medium">
                 {{ ANGLE_LABELS[i] || `View ${i + 1}` }}
               </p>
             </div>
 
-            <!-- Skeleton placeholders if fewer than 10 came back -->
+            <!-- Skeleton placeholders if fewer than 9 came back -->
             <div
-              v-for="i in Math.max(0, 10 - angleImages.length)"
+              v-for="i in Math.max(0, 9 - angleImages.length)"
               :key="`skel-${i}`"
               class="aspect-[3/4] rounded-xl bg-[var(--color-border)] animate-pulse"
             />

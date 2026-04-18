@@ -1,27 +1,137 @@
 """
-Google Gemini image generation (Nano Banana 2).
+Google Gemini image generation (Nano Banana 2 — gemini-3.1-flash-image-preview).
 
-Two-phase pipeline:
-  Phase 0 — analyze_body_type():
-      Analyzes reference photos to detect the person's body shape.
-  Phase 1 — generate_angle_variations():
-      Takes 6 real guided photos, generates 10 synthetic angle fills.
-  Phase 2 — generate_identity_candidates():
-      Takes all 16 images (6 real + 10 angles), generates 4 final try-on portraits.
-      User picks one as their active identity.
+Pipeline:
+  Phase 0 — analyze_body_type():        Detect body shape from reference photos.
+  Phase 1 — generate_angle_variations(): Upscale 5 user uploads → 8 synthetic angles via chat session.
+  Phase 2 — generate_identity_candidates(): 4 final try-on portraits from all references.
+  Try-on — generate_tryon():             Multi-garment outfit try-on with 90% realism.
 
-B2C v1.1 additions:
-  normalize_garment(): Pre-process garment — clean background, normalize lighting.
-  validate_tryon_result(): QC check result image, return confidence score + notes.
+Key consistency techniques (from research):
+  - Temperature 0.5 for all identity-sensitive calls (reduces drift vs default 1.0)
+  - Multi-turn chat session for angle generation (session continuity = better face/body consistency)
+  - Face close-up as FIRST reference image (highest attention weight at position 0)
+  - Restorative upscaling (Pillow LANCZOS) on all input photos before Gemini
+  - Explicit identity lock language + semantic negative prompts
+  - 4 character consistency reference slots max (14-image framework)
 """
 import asyncio
+import io
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from google import genai
 from google.genai import types
+from PIL import Image
 from app.config import settings
+
+
+# ── Restorative upscaling ─────────────────────────────────────────────────────
+
+_MIN_FACE_HEIGHT_PX = 800  # minimum face height we want before feeding Gemini
+_TARGET_LONG_EDGE_PX = 1600  # upscale target for full-body reference shots
+
+def _to_jpeg(img: "Image.Image", quality: int = 92) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
+def auto_crop_face(img_bytes: bytes) -> bytes:
+    """
+    Detect the largest face in the image using OpenCV Haar cascade,
+    then crop tightly around it with 40% padding on all sides.
+
+    Falls back to a smart top-center crop (top 50% of the image)
+    if no face is detected — handles blurry or low-res photos.
+
+    Never calls Gemini — pure Python, no API cost.
+    """
+    import cv2
+    import numpy as np
+
+    try:
+        # Decode bytes → numpy array
+        arr = np.frombuffer(img_bytes, np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return img_bytes
+
+        h, w = img.shape[:2]
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # Load Haar cascade (bundled with OpenCV — no download needed)
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        detector = cv2.CascadeClassifier(cascade_path)
+
+        faces = detector.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=4,
+            minSize=(60, 60),
+        )
+
+        if len(faces) > 0:
+            # Pick the largest face
+            x, y, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+            _log.info("auto_crop_face: detected %d face(s), cropping largest (%dx%d)", len(faces), fw, fh)
+
+            # 40% padding around the detected face box
+            pad_x = int(fw * 0.4)
+            pad_y = int(fh * 0.4)
+            x1 = max(0, x - pad_x)
+            y1 = max(0, y - pad_y)
+            x2 = min(w, x + fw + pad_x)
+            y2 = min(h, y + fh + pad_y)
+        else:
+            # No face detected — smart fallback: crop top-center 50% of image
+            # Faces are almost always in the top half of a photo
+            _log.info("auto_crop_face: no face detected, using top-center fallback crop")
+            crop_h = int(h * 0.5)
+            margin = int(w * 0.15)
+            x1, y1 = margin, 0
+            x2, y2 = w - margin, crop_h
+
+        cropped = img[y1:y2, x1:x2]
+
+        # Encode back to JPEG
+        success, buf = cv2.imencode(".jpg", cropped, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if success:
+            return buf.tobytes()
+        return img_bytes
+
+    except Exception as exc:
+        _log.warning("auto_crop_face failed (%s), using original", exc)
+        return img_bytes
+
+
+def upscale_reference(img_bytes: bytes, target_long_edge: int = _TARGET_LONG_EDGE_PX) -> bytes:
+    """
+    Restorative 2x upscale using Pillow LANCZOS resampling.
+    Only upscales — never downsizes. Converts to RGB JPEG at quality 92.
+    This is NOT generative upscaling — it sharpens without inventing features.
+    """
+    try:
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        w, h = img.size
+        long_edge = max(w, h)
+        if long_edge < target_long_edge:
+            scale = target_long_edge / long_edge
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=92, optimize=True)
+        result = buf.getvalue()
+        # Stay under Gemini 7MB inline limit
+        if len(result) > 6_500_000:
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=82, optimize=True)
+            result = buf.getvalue()
+        return result
+    except Exception:
+        return img_bytes  # safe fallback — return original
 
 
 # ── Skin tone descriptors ─────────────────────────────────────────────────────
@@ -149,8 +259,7 @@ def _analyze_body_type_sync(image_bytes_list: list[bytes], gender: str) -> str:
         parts.append(types.Part.from_bytes(data=img, mime_type="image/jpeg"))
 
     response = client.models.generate_content(
-        # model="gemini-2.5-flash",
-        model="gemini-3.1-flash-image-preview",
+        model="gemini-2.5-flash",
         contents=[types.Content(parts=parts)],
     )
     detected = response.text.strip().lower().split()[0] if response.text else ""
@@ -166,89 +275,108 @@ async def analyze_body_type(reference_images: list[bytes], gender: str) -> str:
         return await loop.run_in_executor(pool, _analyze_body_type_sync, reference_images, gender)
 
 
-# ── Phase 1 — angle variation prompts ────────────────────────────────────────
-def _build_angle_prompts(profile: UserProfile) -> list[str]:
+# ── Phase 1 — identity lock + 8-angle prompts ────────────────────────────────
+
+def _build_identity_lock(profile: UserProfile) -> str:
+    """
+    Seed prompt for the multi-turn chat session.
+    Establishes the person's identity from the 5 uploaded reference photos.
+    Images must be provided in this order: [face_close_up, full_body_front, left_30, right_30, walking].
+    """
     phys = _physical_base(profile)
-
-    ANGLES = [
-        (
-            "Generate a photorealistic full-body image of this person facing directly BACKWARD "
-            "(rear view, 180°). Show the back of the head, shoulders, spine, buttocks, and the "
-            "full legs down to the feet. Arms hanging relaxed at the sides. Plain white studio "
-            "background. Even soft studio lighting. Same clothing as front-view reference."
-        ),
-        (
-            "Generate a photorealistic full-body image of this person at a 45-DEGREE THREE-QUARTER "
-            "angle tilted to the LEFT — body and face both angled, showing the left side of the "
-            "face and left shoulder prominently. Full body visible head to toe. Plain white "
-            "studio background. Soft studio lighting."
-        ),
-        (
-            "Generate a photorealistic full-body image of this person at a 45-DEGREE THREE-QUARTER "
-            "angle tilted to the RIGHT — body and face both angled, showing the right side of the "
-            "face and right shoulder prominently. Full body visible head to toe. Plain white "
-            "studio background. Soft studio lighting."
-        ),
-        (
-            "Generate a photorealistic CLOSE-UP PORTRAIT of this person's face from a slight "
-            "30-DEGREE LOW ANGLE — camera positioned just below chin level looking upward. "
-            "Shows the underside of the jaw, neck, and full facial structure. Natural expression. "
-            "Neutral background. Sharp focus on all facial features."
-        ),
-        (
-            "Generate a photorealistic CLOSE-UP PORTRAIT of this person's face from a slight "
-            "30-DEGREE HIGH ANGLE — camera positioned above eye level looking downward. "
-            "Shows the top of the head, forehead, full face, and slightly down to the shoulders. "
-            "Natural expression. Neutral background. Sharp focus."
-        ),
-        (
-            "Generate a photorealistic FULL-BODY image of this person in a relaxed SEATED POSITION "
-            "on a plain white cube or bench, facing directly forward. Hands resting on thighs. "
-            "Both feet flat on the ground. Natural upright seated posture. Plain white studio "
-            "background. Soft even lighting."
-        ),
-        (
-            "Generate a photorealistic FULL-BODY image of this person in a MID-STRIDE WALKING POSE "
-            "facing the camera — left foot stepping forward, right foot pushing off behind. "
-            "Arms in natural opposing swing. Head level, looking at camera. Full figure head to "
-            "toe visible. Plain white background. Natural motion feel."
-        ),
-        (
-            "Generate a photorealistic FULL-BODY image of this person with ARMS CROSSED confidently "
-            "at chest height, facing directly forward. Feet shoulder-width apart. Relaxed but "
-            "confident posture. Full figure visible head to toe. Plain white studio background. "
-            "Soft front studio lighting."
-        ),
-        (
-            "Generate a photorealistic UPPER-BODY PORTRAIT (waist up) of this person facing "
-            "directly forward, one hand loosely resting at the collarbone and the other arm "
-            "hanging naturally at side. Relaxed natural expression. Neutral light grey background. "
-            "Soft portrait lighting with subtle side fill."
-        ),
-        (
-            "Generate a photorealistic FULL-BODY image of this person in a RELAXED CASUAL POSE — "
-            "weight shifted to the right leg, left knee slightly bent, one hand in a side pocket. "
-            "Facing 15 degrees to the right but head turned directly at camera. Effortless "
-            "natural stance. Plain white studio background. Fashion editorial lighting."
-        ),
-    ]
-
-    reminder = (
-        "\nREMINDER — FACIAL HAIR: if the person has any beard, mustache, or stubble in the "
-        "reference photos, reproduce it exactly — same shape, density, and colour. Do NOT remove it.\n"
-        "REMINDER — NO JEWELRY: remove all necklaces, chains, rings, bracelets, and watches "
-        "from the output. Bare neck, bare hands, bare wrists."
+    return (
+        f"I am providing 5 high-resolution reference photos of the SAME person.\n"
+        f"Photo order:\n"
+        f"  Photo 1 — CLOSE-UP FACE (primary identity anchor)\n"
+        f"  Photo 2 — FULL BODY FRONT (proportions anchor)\n"
+        f"  Photo 3 — LEFT 30° THREE-QUARTER (left-side reference)\n"
+        f"  Photo 4 — RIGHT 30° THREE-QUARTER (right-side reference)\n"
+        f"  Photo 5 — WALKING / CASUAL POSE (natural movement reference)\n\n"
+        f"IDENTITY LOCK — memorize every detail from these 5 photos:\n"
+        f"  • Face geometry: exact eye shape, spacing, eyelid thickness, iris size, brow arch, "
+        f"jawline, chin shape, cheekbone width, nose bridge and tip shape\n"
+        f"  • Skin tone: exact pigmentation, undertone, and any marks, moles, or texture\n"
+        f"  • Hair: exact color, length, texture, parting, and hairline shape\n"
+        f"  • Facial hair: if ANY photo shows beard/stubble/mustache, reproduce it exactly — "
+        f"same density, shape, length, and color. NEVER remove or reduce facial hair.\n"
+        f"  • Body proportions: shoulder width, torso length, leg length, hip width — "
+        f"all as shown in Photo 2\n\n"
+        f"PHYSICAL PROFILE:\n{phys}\n\n"
+        f"RULES FOR ALL SUBSEQUENT GENERATIONS:\n"
+        f"  1. This person's face MUST be identical across all angles — same geometry, never drifting\n"
+        f"  2. Do NOT beautify, smooth, slim, or alter any facial feature\n"
+        f"  3. Do NOT remove facial hair if present\n"
+        f"  4. Do NOT add or remove jewelry\n"
+        f"  5. Body proportions must match the {profile.height_cm}cm height profile\n"
+        f"  6. Clothing for all angles: plain white crew-neck t-shirt + plain light grey fitted trousers\n"
+        f"  7. Background for all angles: pure white studio (#FFFFFF), soft even front lighting\n"
+        f"  8. Quality: ultra-high resolution, photorealistic, sharp focus throughout\n\n"
+        f"Confirm you have locked this person's identity by generating: "
+        f"full-body front-facing symmetrical shot, camera at eye level, 85mm portrait lens, "
+        f"feet shoulder-width apart, arms relaxed at sides, neutral expression, looking directly at camera."
     )
 
-    return [
-        f"{phys}\n\nSPECIFIC VIEWPOINT TO GENERATE:\n{angle}\n\n"
-        f"IMPORTANT: Preserve this person's exact face, hair, skin tone, and body proportions "
-        f"from all reference photos. Generate only the specified viewpoint/pose. "
-        f"CLOTHING: plain white crew-neck t-shirt and plain light grey fitted trousers — "
-        f"no logos, no patterns. QUALITY: ultra-high resolution, photorealistic, sharp focus."
-        f"{reminder}"
-        for angle in ANGLES
-    ]
+
+# 8 angle prompts — used as sequential chat turns after the seed
+_ANGLE_TURNS: list[str] = [
+    # 1 — Left 30° three-quarter
+    (
+        "Same person. Generate a full-body three-quarter angle shot, rotated 30 degrees clockwise "
+        "from front view — body and face both turned LEFT 30°, showing the left side of the face "
+        "and left shoulder prominently. Camera: eye level, 85mm lens, full-body head to toe. "
+        "Identical face and body proportions to the reference. White studio background."
+    ),
+    # 2 — Right 30° three-quarter
+    (
+        "Same person. Generate a full-body three-quarter angle shot, rotated 30 degrees counter-clockwise "
+        "from front view — body and face both turned RIGHT 30°, showing the right side of the face "
+        "and right shoulder prominently. Camera: eye level, 85mm lens, full-body head to toe. "
+        "Identical face and body proportions. White studio background."
+    ),
+    # 3 — Left 90° full profile
+    (
+        "Same person. Generate a full-body LEFT SIDE PROFILE shot — person rotated 90 degrees, "
+        "camera on the left side, showing pure left side silhouette: left cheek, ear, left shoulder, "
+        "left arm, left hip, left leg profile. Camera: eye level, 85mm lens, full-body head to toe. "
+        "No face visible except left cheek/ear profile. White studio background."
+    ),
+    # 4 — Right 90° full profile
+    (
+        "Same person. Generate a full-body RIGHT SIDE PROFILE shot — person rotated 90 degrees, "
+        "camera on the right side, showing pure right side silhouette: right cheek, ear, right shoulder, "
+        "right arm, right hip, right leg profile. Camera: eye level, 85mm lens, full-body head to toe. "
+        "White studio background."
+    ),
+    # 5 — Rear view
+    (
+        "Same person. Generate a full-body REAR VIEW shot — person facing directly away from camera "
+        "(180° rotation from front). Show: back of head with exact hair, shoulders, spine, back torso, "
+        "buttocks, and full legs to feet. Arms hanging relaxed at sides. Camera: eye level, 85mm lens, "
+        "full-body head to toe. White studio background."
+    ),
+    # 6 — Walking pose (front-facing)
+    (
+        "Same person. Generate a full-body WALKING POSE — natural mid-stride, right foot stepping "
+        "forward, left foot pushing off behind. Arms in natural opposing swing. Body facing camera "
+        "at slight 10° angle, head turned to look directly at camera. Natural walking energy, "
+        "not stiff. Camera: eye level, 35mm lens, full-body head to toe. White studio background."
+    ),
+    # 7 — Seated casual
+    (
+        "Same person. Generate a full-body SEATED CASUAL POSE — sitting on a plain white cube, "
+        "facing forward, hands resting on thighs, feet flat on ground, natural upright posture. "
+        "Relaxed natural expression. Camera: eye level, 85mm lens, full-body head to toe. "
+        "White studio background, soft even lighting."
+    ),
+    # 8 — Confident power stance
+    (
+        "Same person. Generate a full-body CONFIDENT POSE — weight shifted to right leg, left knee "
+        "slightly bent, one hand loosely in a front pocket, other arm hanging naturally. "
+        "Shoulders back, chest open, head slightly tilted, subtle confident expression. "
+        "Facing 15 degrees to the right, head turned directly at camera. Fashion editorial energy. "
+        "Camera: eye level, 85mm lens, full-body head to toe. White studio background."
+    ),
+]
 
 
 # ── Phase 2 — final try-on portrait prompts ───────────────────────────────────
@@ -284,9 +412,16 @@ def _build_portrait_prompts(profile: UserProfile) -> list[str]:
 
     base = (
         f"{phys}\n\n"
-        f"You have been provided with a comprehensive set of reference photographs of this person "
-        f"from multiple angles (front, sides, back, close-up, and various poses). Use ALL of them "
-        f"to build the most accurate possible representation.\n\n"
+        f"REFERENCE IMAGES PROVIDED (in order):\n"
+        f"  Photo 1 — CLOSE-UP FACE (primary identity anchor — highest priority)\n"
+        f"  Photo 2 — FULL BODY FRONT (proportions anchor)\n"
+        f"  Photo 3 — LEFT 30° THREE-QUARTER\n"
+        f"  Photo 4 — RIGHT 30° THREE-QUARTER\n"
+        f"  Photo 5 — WALKING / CASUAL POSE\n"
+        f"  Photos 6+ — Additional synthetic angle views\n\n"
+        f"IDENTITY LOCK: Photo 1 (face close-up) is the HIGHEST PRIORITY reference. "
+        f"Every facial feature — eye shape, nose, jaw, skin tone, hair — must match Photo 1 exactly. "
+        f"Use ALL photos together to reconstruct accurate 3D body proportions.\n\n"
         f"CLOTHING: plain seamless white crew-neck t-shirt and plain fitted light grey trousers — "
         f"no patterns, no logos, minimal base clothing for virtual garment overlay.\n"
         f"BACKGROUND: pure flat white studio (#FFFFFF), no shadows on background, no props.\n"
@@ -308,9 +443,36 @@ def _build_portrait_prompts(profile: UserProfile) -> list[str]:
 # ── Core Gemini call ──────────────────────────────────────────────────────────
 _log = logging.getLogger(__name__)
 
+_MODEL = "gemini-3.1-flash-image-preview"
+
+# Consistency config — temperature 0.5 reduces identity drift vs default 1.0
+_CONSISTENCY_CONFIG = types.GenerateContentConfig(
+    response_modalities=["IMAGE"],
+    temperature=0.5,
+    top_p=0.82,
+)
+
+# Try-on config — slightly more creative for garment rendering
+_TRYON_CONFIG = types.GenerateContentConfig(
+    response_modalities=["IMAGE"],
+    temperature=0.55,
+    top_p=0.85,
+)
+
+
+def _extract_image(response) -> bytes | None:
+    """Extract first image bytes from a Gemini response."""
+    try:
+        for part in response.candidates[0].content.parts:
+            if part.inline_data and part.inline_data.data:
+                return part.inline_data.data
+    except (IndexError, AttributeError):
+        pass
+    return None
+
 
 def _generate(image_bytes_list: list[bytes], prompt: str) -> bytes | None:
-    """Synchronous Gemini call with multiple reference images. Runs in thread pool."""
+    """Single Gemini image generation call. Runs in thread pool."""
     try:
         client = genai.Client(api_key=settings.google_api_key)
         parts: list[types.Part] = [types.Part.from_text(text=prompt)]
@@ -318,18 +480,77 @@ def _generate(image_bytes_list: list[bytes], prompt: str) -> bytes | None:
             parts.append(types.Part.from_bytes(data=img, mime_type="image/jpeg"))
 
         response = client.models.generate_content(
-            model="gemini-3.1-flash-image-preview",
+            model=_MODEL,
             contents=[types.Content(parts=parts)],
-            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+            config=_CONSISTENCY_CONFIG,
         )
-        for part in response.candidates[0].content.parts:
-            if part.inline_data and part.inline_data.data:
-                return part.inline_data.data
-        _log.warning("Gemini returned no image data. Parts: %s", response.candidates[0].content.parts)
-        return None
+        result = _extract_image(response)
+        if not result:
+            _log.warning("Gemini returned no image data")
+        return result
     except Exception as exc:
         _log.error("Gemini _generate failed: %s", exc)
         return None
+
+
+def _generate_angle_series_sync(
+    reference_images: list[bytes],
+    angle_prompts: list[str],
+    identity_lock: str,
+) -> list[bytes]:
+    """
+    Generate 8 angle variations via a SINGLE multi-turn chat session.
+    Session continuity keeps face + body consistent across all angles.
+    Reference images: [face_close_up, full_body_front, 3q_angle] — face FIRST.
+    """
+    client = genai.Client(api_key=settings.google_api_key)
+    chat = client.chats.create(model=_MODEL)
+    results: list[bytes] = []
+
+    # Turn 0 — establish identity with all reference images
+    seed_parts: list[types.Part] = [types.Part.from_text(text=identity_lock)]
+    for img in reference_images:
+        seed_parts.append(types.Part.from_bytes(data=img, mime_type="image/jpeg"))
+
+    try:
+        seed_response = chat.send_message(
+            types.Content(parts=seed_parts),
+            config=_CONSISTENCY_CONFIG,
+        )
+        # If seed response already contains an image (front view), capture it
+        img = _extract_image(seed_response)
+        if img:
+            results.append(img)
+            _log.info("Angle series: seed turn produced image (1/%d)", len(angle_prompts))
+    except Exception as exc:
+        _log.warning("Angle series seed turn failed: %s — falling back to _generate", exc)
+        # Fallback: generate each angle independently
+        for prompt in angle_prompts:
+            result = _generate(reference_images, identity_lock + "\n\n" + prompt)
+            if result:
+                results.append(result)
+        return results
+
+    # Turns 1-N — one angle per turn, model maintains session context
+    for i, angle_prompt in enumerate(angle_prompts):
+        if results and i == 0:
+            # Already have the seed image, skip to next angle
+            pass
+        try:
+            response = chat.send_message(
+                angle_prompt,
+                config=_CONSISTENCY_CONFIG,
+            )
+            img = _extract_image(response)
+            if img:
+                results.append(img)
+                _log.info("Angle series: generated angle %d/%d", len(results), len(angle_prompts))
+            else:
+                _log.warning("Angle series: no image in turn %d", i + 1)
+        except Exception as exc:
+            _log.warning("Angle series turn %d failed: %s", i + 1, exc)
+
+    return results
 
 
 async def _run_concurrent(
@@ -742,15 +963,14 @@ def _generate_outfit_sync(person_bytes: bytes, garments: list[GarmentInput], pos
             parts.append(types.Part.from_bytes(data=g.image_bytes, mime_type="image/jpeg"))
 
         response = client.models.generate_content(
-            model="gemini-3.1-flash-image-preview",
+            model=_MODEL,
             contents=[types.Content(parts=parts)],
-            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+            config=_TRYON_CONFIG,
         )
-        for part in response.candidates[0].content.parts:
-            if part.inline_data and part.inline_data.data:
-                return part.inline_data.data
-        _log.warning("Gemini outfit try-on returned no image. Parts: %s", response.candidates[0].content.parts)
-        return None
+        result = _extract_image(response)
+        if not result:
+            _log.warning("Gemini outfit try-on returned no image")
+        return result
     except Exception as exc:
         _log.error("Gemini outfit try-on failed: %s", exc)
         return None
@@ -799,13 +1019,13 @@ def _normalize_garment_sync(garment_bytes: bytes, category: str) -> bytes:
             types.Part.from_bytes(data=garment_bytes, mime_type="image/jpeg"),
         ]
         response = client.models.generate_content(
-            model="gemini-3.1-flash-image-preview",
+            model=_MODEL,
             contents=[types.Content(parts=parts)],
-            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+            config=_TRYON_CONFIG,
         )
-        for part in response.candidates[0].content.parts:
-            if part.inline_data and part.inline_data.data:
-                return part.inline_data.data
+        result = _extract_image(response)
+        if result:
+            return result
         _log.warning("Garment normalization returned no image, using original")
         return garment_bytes
     except Exception as exc:
@@ -917,16 +1137,57 @@ async def validate_tryon_result(result_bytes: bytes, garments: list[GarmentInput
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 async def generate_angle_variations(
     reference_images: list[bytes],
     profile: UserProfile,
 ) -> list[bytes]:
     """
-    Phase 1: Generate 10 synthetic angle fills from the 6 guided reference photos.
-    Returns list of JPEG byte strings (may be fewer than 10 if some generations fail).
+    Phase 1: Upscale 5 user-uploaded reference photos, then generate 8 multi-camera-angle
+    synthetic views via a single multi-turn Gemini chat session for maximum face/body consistency.
+
+    Expected reference_images order (MANDATORY):
+      [0] Close-up face photo      — primary identity anchor
+      [1] Full-body front           — proportions anchor
+      [2] Left 30° three-quarter    — left-side reference
+      [3] Right 30° three-quarter   — right-side reference
+      [4] Walking / casual pose     — natural movement reference
+
+    Returns up to 8 angle images (fewer if some turns fail).
     """
-    prompts = _build_angle_prompts(profile)
-    return await _run_concurrent(reference_images, prompts, max_workers=10)
+    # Step 1a — auto-crop face on Photo 0 (face_closeup slot)
+    # Handles case where user uploaded a full-body photo instead of a close-up
+    _log.info("Auto-cropping face from Photo 1...")
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        face_bytes = await loop.run_in_executor(pool, auto_crop_face, reference_images[0])
+    images_to_upscale = [face_bytes] + list(reference_images[1:])
+
+    # Step 1b — upscale all 5 photos before feeding Gemini
+    _log.info("Upscaling %d reference photos...", len(images_to_upscale))
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        upscale_tasks = [
+            loop.run_in_executor(pool, upscale_reference, img)
+            for img in images_to_upscale
+        ]
+        upscaled = list(await asyncio.gather(*upscale_tasks))
+    _log.info("Upscaling complete. Sizes: %s", [len(b) for b in upscaled])
+
+    # Step 2 — build identity lock prompt
+    identity_lock = _build_identity_lock(profile)
+
+    # Step 3 — generate 8 angles via multi-turn chat session
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        results = await loop.run_in_executor(
+            pool,
+            _generate_angle_series_sync,
+            upscaled,
+            _ANGLE_TURNS,
+            identity_lock,
+        )
+
+    _log.info("Angle generation complete: %d/%d images", len(results), len(_ANGLE_TURNS) + 1)
+    return results
 
 
 async def generate_identity_candidates(
@@ -935,8 +1196,14 @@ async def generate_identity_candidates(
 ) -> list[bytes]:
     """
     Phase 2: Generate 4 final try-on portrait candidates from all reference images.
+    Face close-up must be first in reference_images for maximum identity fidelity.
     Returns list of JPEG byte strings.
     """
     p = profile or UserProfile()
+    # Upscale all references before portrait generation
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        upscale_tasks = [loop.run_in_executor(pool, upscale_reference, img) for img in reference_images]
+        upscaled = list(await asyncio.gather(*upscale_tasks))
     prompts = _build_portrait_prompts(p)
-    return await _run_concurrent(reference_images, prompts, max_workers=4)
+    return await _run_concurrent(upscaled, prompts, max_workers=4)
